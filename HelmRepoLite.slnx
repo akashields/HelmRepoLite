@@ -1,0 +1,33 @@
+
+<!-- Converted from HelmRepoLite.sln -->
+<Solution FileFormatVersion="12.00" VisualStudioVersion="17.0">
+	<Projects>
+		<Project>
+			<TypeGuid>{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</TypeGuid>
+			<Name>HelmRepoLite</Name>
+			<Path>src/HelmRepoLite/HelmRepoLite.csproj</Path>
+			<ProjectGuid>{A1B2C3D4-1111-4444-9999-AAAAAAAAAAAA}</ProjectGuid>
+		</Project>
+		<Project>
+			<TypeGuid>{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</TypeGuid>
+			<Name>HelmRepoLite.Tests</Name>
+			<Path>tests/HelmRepoLite.Tests/HelmRepoLite.Tests.csproj</Path>
+			<ProjectGuid>{B1B2C3D4-2222-4444-9999-BBBBBBBBBBBB}</ProjectGuid>
+		</Project>
+	</Projects>
+	<Global>
+		<SolutionConfigurations>
+			<Configuration Name="Debug|Any CPU" />
+			<Configuration Name="Release|Any CPU" />
+		</SolutionConfigurations>
+		<ProjectConfigurations>
+			<ProjectConfiguration ProjectGuid="{A1B2C3D4-1111-4444-9999-AAAAAAAAAAAA}" Configuration="Debug|Any CPU" Build="true" />
+			<ProjectConfiguration ProjectGuid="{A1B2C3D4-1111-4444-9999-AAAAAAAAAAAA}" Configuration="Release|Any CPU" Build="true" />
+			<ProjectConfiguration ProjectGuid="{B1B2C3D4-2222-4444-9999-BBBBBBBBBBBB}" Configuration="Debug|Any CPU" Build="true" />
+			<ProjectConfiguration ProjectGuid="{B1B2C3D4-2222-4444-9999-BBBBBBBBBBBB}" Configuration="Release|Any CPU" Build="true" />
+		</ProjectConfigurations>
+	</Global>
+  <Project Path="src/HelmRepoLite/HelmRepoLite.csproj" />
+  <Project Path="tests/HelmRepoLite.Tests/HelmRepoLite.Tests.csproj" />
+</Solution>
+

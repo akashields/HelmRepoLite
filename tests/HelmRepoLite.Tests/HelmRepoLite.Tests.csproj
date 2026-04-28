@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+
+    <!-- Suppress test-specific analyzer warnings -->
+    <NoWarn>$(NoWarn);CA1305;CA1707;CS1591;IDE0005</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Test infrastructure packages are permitted; they don't ship in the tool
+    package. Keep this list minimal: xunit + the SDK runner. No Moq / FluentAssertions.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\HelmRepoLite\HelmRepoLite.csproj" />
+  </ItemGroup>
+
+</Project>

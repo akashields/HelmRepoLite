@@ -1,0 +1,20 @@
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{yml,yaml,json,md}]
+indent_size = 2
+
+[*.cs]
+# Encourage file-scoped namespaces
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_using_directive_placement = outside_namespace:warning
+csharp_prefer_braces = when_multiline:silent
+dotnet_diagnostic.IDE0005.severity = warning  # remove unused usings
+dotnet_diagnostic.CA1062.severity = none      # null check on public params (records make this noisy)

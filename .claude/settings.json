@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build*)",
+      "Bash(dotnet test*)",
+      "Bash(dotnet pack*)",
+      "Bash(dotnet run*)",
+      "Bash(dotnet restore*)",
+      "Bash(dotnet --version)",
+      "Bash(dotnet --list-sdks)",
+      "Bash(dotnet --info)",
+      "Bash(dotnet tool list*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(helm version*)",
+      "Bash(helm create*)",
+      "Bash(helm package*)",
+      "Bash(helm repo *)",
+      "Bash(helm search *)",
+      "Bash(helm install*)",
+      "Bash(helm uninstall*)",
+      "Bash(helm pull*)",
+      "Bash(curl http://localhost:*)",
+      "Bash(curl -X * http://localhost:*)",
+      "Bash(ss -ltn*)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(rm -rf /tmp/smoke*)",
+      "Bash(rm -rf /tmp/helmrepolite*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/*)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | sh)",
+      "Bash(wget * | bash)",
+      "Bash(dotnet add package*)",
+      "Bash(dotnet nuget push*)",
+      "Bash(git push*)",
+      "Bash(git push --force*)",
+      "Bash(git reset --hard*)",
+      "Read(.env*)",
+      "Read(**/secrets/**)"
+    ]
+  }
+}

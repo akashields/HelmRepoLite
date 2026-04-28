@@ -1,0 +1,44 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run HelmRepoLite (debug)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/HelmRepoLite/bin/Debug/net10.0/HelmRepoLite.dll",
+      "args": [
+        "--port",
+        "8080",
+        "--storage-dir",
+        "${workspaceFolder}/.runtime/charts",
+        "--drop-dir",
+        "${workspaceFolder}/.runtime/drop",
+        "--debug"
+      ],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "console": "internalConsole",
+      "serverReadyAction": {
+        "action": "openExternally",
+        "pattern": "listening on (http://[\\w.:]+)"
+      }
+    },
+    {
+      "name": "Test (current file)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "dotnet",
+      "args": [
+        "test",
+        "${workspaceFolder}/tests/HelmRepoLite.Tests/HelmRepoLite.Tests.csproj",
+        "--filter",
+        "FullyQualifiedName~${fileBasenameNoExtension}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    }
+  ]
+}

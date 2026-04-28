@@ -1,0 +1,30 @@
+<Project>
+
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisMode>Recommended</AnalysisMode>
+
+    <!-- Reproducible builds -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition=" '$(CI)' == 'true' ">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <!--
+    "Zero third-party runtime dependencies" guard.
+    The shipping project (HelmRepoLite) must not pull any external NuGet packages
+    at runtime. Test projects (IsTestProject == true) are exempt. To bypass for a
+    legitimate reason, set <AllowThirdPartyPackages>true</AllowThirdPartyPackages>
+    in the offending csproj and document why.
+  -->
+  <Target Name="ForbidThirdPartyPackages"
+          BeforeTargets="ResolveAssemblyReferences"
+          Condition=" '$(IsTestProject)' != 'true' AND '$(AllowThirdPartyPackages)' != 'true' ">
+    <Error Condition=" '@(PackageReference)' != '' "
+           Text="HelmRepoLite ships with zero third-party packages. Found PackageReference(s): @(PackageReference). If you really need this, set AllowThirdPartyPackages=true in the project and explain why in the PR description." />
+  </Target>
+
+</Project>
