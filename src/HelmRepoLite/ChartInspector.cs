@@ -60,9 +60,11 @@ public static class ChartInspector
 
         var parsed = MiniYaml.Parse(chartYamlText);
         var name = MiniYaml.GetString(parsed, "name")
-            ?? throw new InvalidDataException("Chart.yaml missing required 'name'");
+            ?? throw new InvalidDataException(
+                $"Chart.yaml missing required 'name'. Raw content:\n{chartYamlText}");
         var version = MiniYaml.GetString(parsed, "version")
-            ?? throw new InvalidDataException("Chart.yaml missing required 'version'");
+            ?? throw new InvalidDataException(
+                $"Chart.yaml missing required 'version'. Raw content:\n{chartYamlText}");
 
         // Validate filename matches name+version per Helm convention.
         var expected = $"{name}-{version}.tgz";

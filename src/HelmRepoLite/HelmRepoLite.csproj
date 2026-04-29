@@ -10,6 +10,7 @@
 
     <!-- Global tool packaging -->
     <PackAsTool>true</PackAsTool>
+    <IsPackable>true</IsPackable>
     <ToolCommandName>helmrepolite</ToolCommandName>
     <PackageId>HelmRepoLite</PackageId>
     <PackageOutputPath>../../artifacts</PackageOutputPath>

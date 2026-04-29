@@ -7,22 +7,19 @@ public class ChartStoreTests : IAsyncLifetime, IDisposable
 {
     private readonly string _tempRoot;
     private readonly string _storage;
-    private readonly string _drop;
     private ChartStore? _store;
 
     public ChartStoreTests()
     {
         _tempRoot = Path.Combine(Path.GetTempPath(), "helmrepolite-store-" + Guid.NewGuid().ToString("N"));
         _storage = Path.Combine(_tempRoot, "storage");
-        _drop = Path.Combine(_tempRoot, "drop");
         Directory.CreateDirectory(_storage);
-        Directory.CreateDirectory(_drop);
     }
 
     public async Task InitializeAsync()
     {
         _store = new ChartStore(
-            new ServerOptions { StorageDir = _storage, DropDir = _drop },
+            new ServerOptions { StorageDir = _storage },
             NullLogger<ChartStore>.Instance);
         await _store.InitializeAsync("http://localhost:8080", CancellationToken.None);
     }
@@ -78,13 +75,13 @@ public class ChartStoreTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
-    public async Task DropFolder_imports_dropped_chart()
+    public async Task StorageDir_detects_copied_chart()
     {
         var src = TestChartBuilder.Build(_tempRoot, "delta", "0.3.0");
-        var dropTarget = Path.Combine(_drop, "delta-0.3.0.tgz");
-        File.Move(src, dropTarget);
+        var dest = Path.Combine(_storage, "delta-0.3.0.tgz");
+        File.Copy(src, dest);
 
-        // Drop watcher is async; poll briefly.
+        // Storage watcher is async; poll briefly.
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
@@ -93,7 +90,6 @@ public class ChartStoreTests : IAsyncLifetime, IDisposable
         }
 
         Assert.NotNull(_store!.FindVersion("delta", "0.3.0"));
-        Assert.True(File.Exists(Path.Combine(_storage, "delta-0.3.0.tgz")));
-        Assert.False(File.Exists(dropTarget)); // moved out of drop
+        Assert.True(File.Exists(dest));
     }
 }

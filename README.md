@@ -1,161 +1,398 @@
 # HelmRepoLite
 
-A lightweight, self-hosted, ChartMuseum-compatible Helm chart repository server written in .NET 10.
+A lightweight, self-hosted, [ChartMuseum](https://github.com/helm/chartmuseum)-compatible
+Helm chart repository server written in .NET 10.
 
-**Goals:**
-- Zero third-party runtime dependencies — only what ships with the .NET SDK / runtime.
-- Distributable as a `dotnet tool` global tool, runnable on any developer machine or CI agent that has .NET installed.
-- Compatible enough with the [ChartMuseum HTTP API](https://github.com/helm/chartmuseum) that `helm repo add`, `helm install`, and the `helm-push` plugin all just work.
-- Two ways to publish: drop a `.tgz` into a watched folder (zero-API CI pattern), or `POST /api/charts` like ChartMuseum.
+**Key properties**
+- **Zero third-party runtime dependencies** — Kestrel, minimal APIs, FileSystemWatcher, and
+  `System.Formats.Tar` all ship with the .NET SDK/runtime.
+- **Two distribution models** — install as a `dotnet` global tool *or* run as a fully
+  self-contained, single-file executable that needs no .NET runtime at all.
+- **Live filesystem sync** — copy, replace, or delete a `.tgz` in the storage directory and the
+  index updates automatically; no restart required.
+- **Browser UI** — navigate to `/` to browse packages, download charts, and delete versions.
+- **ChartMuseum-compatible API** — `helm repo add`, `helm install`, `helm-push`, and
+  `curl`-based uploads all work without modification.
 
-**Non-goals (today):** cloud storage backends, OCI registry, multi-tenancy/`--depth`, JWT auth, web UI.
+---
+
+## Installation
+
+### Option A — .NET global tool (requires .NET 10 runtime)
+
+```powershell
+# Install from NuGet (once published)
+dotnet tool install -g HelmRepoLite
+
+# Or install from a local build
+.\build.ps1 -Version 1.0.0
+dotnet tool install -g HelmRepoLite --add-source .\artifacts\nuget
+```
+
+After installation the `helmrepolite` command is available everywhere in your shell.
+
+### Option B — Self-contained executable (no .NET required)
+
+Download the binary for your platform from the release page, or build it yourself:
+
+```powershell
+.\build.ps1 -Version 1.0.0
+# Executable is at: .\artifacts\standalone\win-x64\helmrepolite.exe
+```
+
+Available platforms: `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`.
 
 ---
 
 ## Quick start
 
-### As a .NET global tool
+```powershell
+# Start the server — storage defaults to ./charts, HTTP port defaults to 8080
+helmrepolite
 
-```bash
-# build the package locally
-dotnet pack ./src/HelmRepoLite -c Release
+# Open http://localhost:8080 in a browser to see the package listing
 
-# install globally from the local artifacts folder
-dotnet tool install --global --add-source ./artifacts HelmRepoLite
-
-# run it
-helmrepolite --port 8080 --storage-dir ./charts --drop-dir ./drop
-```
-
-### From source
-
-```bash
-dotnet run --project ./src/HelmRepoLite -- --port 8080 --storage-dir ./charts
-```
-
-### Talking to it with Helm
-
-```bash
+# Add the repo to Helm
 helm repo add local http://localhost:8080
 helm repo update
 helm search repo local
+```
 
-# publish a chart by dropping the file (no API call needed)
-helm package mychart/
-mv mychart-0.1.0.tgz ./drop/
+Drop any `.tgz` Helm chart into `./charts` and the index updates within seconds.
 
-# or publish via the ChartMuseum upload API
+---
+
+## Configuration
+
+Every flag is also readable from the `HELMREPOLITE_<UPPER_SNAKE_CASE>` environment variable,
+e.g. `HELMREPOLITE_STORAGE_DIR=./my-charts`.
+
+### Core
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--port <int>` | `HELMREPOLITE_PORT` | `8080` | HTTP port |
+| `--host <ip>` | `HELMREPOLITE_HOST` | `0.0.0.0` | Bind address |
+| `--storage-dir <path>` | `HELMREPOLITE_STORAGE_DIR` | `./charts` | Directory that holds `.tgz` files and `index.yaml` |
+| `--chart-url <url>` | `HELMREPOLITE_CHART_URL` | auto-detected | Base URL written into `index.yaml` for chart download links |
+| `--debug` | `HELMREPOLITE_DEBUG` | off | Verbose request and operation logs |
+
+### HTTPS
+
+HTTPS requires `--https-port` and exactly one certificate source.
+HTTP continues to serve on `--port` alongside HTTPS.
+
+| Flag | Env var | Description |
+|------|---------|-------------|
+| `--https-port <int>` | `HELMREPOLITE_HTTPS_PORT` | HTTPS port |
+| `--https-cert-file <path>` | `HELMREPOLITE_HTTPS_CERT_FILE` | Path to a PFX/PKCS#12 certificate file |
+| `--https-cert-password <s>` | `HELMREPOLITE_HTTPS_CERT_PASSWORD` | Password for the PFX file (default: empty) |
+| `--https-cert-thumbprint <s>` | `HELMREPOLITE_HTTPS_CERT_THUMBPRINT` | SHA-1 thumbprint — searches `CurrentUser\My` then `LocalMachine\My` |
+| `--https-cert-subject <s>` | `HELMREPOLITE_HTTPS_CERT_SUBJECT` | Subject/CN — searches `CurrentUser\My` then `LocalMachine\My` |
+
+```powershell
+# HTTPS with a PFX file
+helmrepolite --https-port 8443 --https-cert-file server.pfx --https-cert-password secret
+
+# HTTPS with a Windows certificate store entry
+helmrepolite --https-port 8443 --https-cert-thumbprint AB12CD34...
+```
+
+### Authentication
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--basic-auth-user <s>` | `HELMREPOLITE_BASIC_AUTH_USER` | _disabled_ | Enables HTTP Basic auth |
+| `--basic-auth-pass <s>` | `HELMREPOLITE_BASIC_AUTH_PASS` | | Password for Basic auth |
+| `--require-auth-get` | `HELMREPOLITE_REQUIRE_AUTH_GET` | off | Require auth for `GET` routes too (default: anonymous reads) |
+
+### API behaviour
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--allow-overwrite` | `HELMREPOLITE_ALLOW_OVERWRITE` | off | Allow re-uploading an existing version without `?force=true` |
+| `--disable-delete` | `HELMREPOLITE_DISABLE_DELETE` | off | `DELETE /api/charts/…` returns 405 |
+| `--disable-api` | `HELMREPOLITE_DISABLE_API` | off | All `/api` routes return 404 (read-only mirror) |
+
+### CI / shutdown
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--enable-shutdown` | `HELMREPOLITE_ENABLE_SHUTDOWN` | off | Enables `POST /shutdown` to stop the process gracefully |
+
+---
+
+## Storage directory
+
+The storage directory (`--storage-dir`, default `./charts`) is the single source of truth.
+
+| Action | Result |
+|--------|--------|
+| Copy a `.tgz` into the directory | Indexed within seconds |
+| Replace a `.tgz` in the directory | Re-indexed automatically |
+| Delete a `.tgz` from the directory | Removed from the index |
+| Delete `index.yaml` | Regenerated automatically from the in-memory index |
+
+On startup the server performs a full rescan so any changes made while it was offline are picked
+up immediately.
+
+### Uploading via the API
+
+```bash
+# Raw binary upload
 curl --data-binary "@mychart-0.1.0.tgz" http://localhost:8080/api/charts
 
-# or with the helm-push plugin
+# Multipart upload (chart + optional provenance)
+curl -F "chart=@mychart-0.1.0.tgz" -F "prov=@mychart-0.1.0.tgz.prov" \
+     http://localhost:8080/api/charts
+
+# Overwrite an existing version
+curl --data-binary "@mychart-0.1.0.tgz" "http://localhost:8080/api/charts?force=true"
+
+# helm-push plugin
 helm plugin install https://github.com/chartmuseum/helm-push
 helm cm-push mychart-0.1.0.tgz local
 ```
 
 ---
 
-## CLI reference
+## HTTP API reference
 
-Every flag also reads from the `HELMREPOLITE_<UPPER_SNAKE>` environment variable.
-
-| Flag | Default | Description |
-| --- | --- | --- |
-| `--port <int>` | `8080` | TCP port to bind |
-| `--host <ip>` | `0.0.0.0` | Bind address |
-| `--storage-dir <path>` | `./charts` | Where `.tgz` and `index.yaml` live |
-| `--drop-dir <path>` | _disabled_ | Folder watched for new `.tgz`; auto-imported |
-| `--chart-url <url>` | auto | Absolute base URL emitted in `index.yaml` |
-| `--basic-auth-user <s>` | _disabled_ | Enables HTTP Basic auth |
-| `--basic-auth-pass <s>` | | Password for Basic auth |
-| `--require-auth-get` | off | Require auth for `GET` too (default: anonymous reads allowed) |
-| `--allow-overwrite` | off | Allow re-uploading existing versions without `?force=true` |
-| `--disable-delete` | off | `DELETE /api/charts/...` returns 405 |
-| `--disable-api` | off | All `/api` routes return 404 (read-only mirror) |
-| `--debug` | off | Verbose request logs |
-
----
-
-## HTTP API
-
-### Helm-facing routes (read)
+### Helm-facing routes
 
 | Method | Path | Description |
-| --- | --- | --- |
-| `GET` | `/index.yaml` | Repository index |
-| `GET` | `/charts/{file}.tgz` | Chart package |
-| `GET` | `/charts/{file}.tgz.prov` | Provenance file |
+|--------|------|-------------|
+| `GET` | `/` | Browser UI — package listing |
+| `GET` | `/index.yaml` | Helm repository index |
+| `GET` | `/charts/{file}.tgz` | Chart package download |
+| `GET` | `/charts/{file}.tgz.prov` | Provenance file download |
 | `GET` | `/health` | Liveness probe — `{"status":"ok"}` |
+| `GET` | `/server/info` | ChartMuseum compatibility probe — `{"version":"…","storage":"local"}` |
 
 ### ChartMuseum-compatible API (`/api`)
 
 | Method | Path | Description |
-| --- | --- | --- |
+|--------|------|-------------|
 | `GET` | `/api/charts` | All charts grouped by name |
-| `GET` | `/api/charts/{name}` | All versions of a chart |
+| `GET` | `/api/charts/{name}` | All versions of a named chart |
 | `GET` | `/api/charts/{name}/{version}` | One specific version |
-| `POST` | `/api/charts` | Upload a chart (raw body or `multipart/form-data` with field `chart` and optional `prov`); accepts `?force=true` |
-| `POST` | `/api/prov` | Upload a `.prov` file; requires `?file=<chart>.tgz` |
-| `DELETE` | `/api/charts/{name}/{version}` | Remove a chart version (and its `.prov`) |
+| `POST` | `/api/charts` | Upload a chart (`?force=true` to overwrite) |
+| `POST` | `/api/prov` | Upload a provenance file (`?file=<chart>.tgz`) |
+| `DELETE` | `/api/charts/{name}/{version}` | Delete a chart version and its `.prov` |
 | `POST` | `/api/resync` | Force a full storage re-scan |
 
----
+### Operational
 
-## Two ways to publish
-
-**Drop folder.** Configure `--drop-dir` and copy a `.tgz` into it. A file watcher imports the package, validates it, moves it into storage atomically, and rebuilds the index. This is the most natural pattern in Cake/CI scripts: `helm package` → `Move-Item` → done.
-
-**HTTP upload.** `POST /api/charts` with the `.tgz` as the body. Works with `curl --data-binary`, with `helm cm-push`, and with multipart uploads from CI tooling.
+| Method | Path | Enabled when |
+|--------|------|--------------|
+| `POST` | `/shutdown` | `--enable-shutdown` is set |
 
 ---
 
-## How it slots into a Cake CI build
+## CI pipeline integration
 
-Recommended pattern: build the project as part of an early CI step, start the server in the background, run subsequent steps that need a live Helm repo, then stop it.
+### PowerShell / Windows
 
-```csharp
-// Cake snippet (illustrative)
-Task("StartHelmRepo")
-    .Does(() =>
-{
-    DotNetBuild("./tools/HelmRepoLite/src/HelmRepoLite/HelmRepoLite.csproj",
-        new DotNetBuildSettings { Configuration = "Release" });
+```powershell
+# Start the server in the background with shutdown enabled
+$proc = Start-Process helmrepolite `
+    -ArgumentList "--storage-dir=./charts","--enable-shutdown","--port=8080" `
+    -PassThru
 
-    var process = StartAndReturnProcess("dotnet",
-        new ProcessSettings {
-            Arguments = $"./tools/HelmRepoLite/src/HelmRepoLite/bin/Release/net10.0/HelmRepoLite.dll" +
-                        $" --port 8080 --storage-dir ./build/charts --drop-dir ./build/drop"
-        });
-    // stash process so a later task can kill it
-});
+# Wait for it to be ready
+$timeout = [DateTime]::UtcNow.AddSeconds(15)
+while ([DateTime]::UtcNow -lt $timeout) {
+    try { Invoke-RestMethod http://localhost:8080/health -ErrorAction Stop; break }
+    catch { Start-Sleep -Milliseconds 200 }
+}
+
+# ... do your Helm work ...
+helm package ./mychart
+Copy-Item mychart-0.1.0.tgz ./charts/   # auto-indexed immediately
+helm repo update local
+helm install myapp local/mychart
+
+# Shut down cleanly
+Invoke-RestMethod -Method POST http://localhost:8080/shutdown
+$proc.WaitForExit(10000)
 ```
 
-See [`docs/cake-integration.md`](docs/cake-integration.md) for a complete example.
+### bash / Linux / macOS
+
+```bash
+helmrepolite --storage-dir=./charts --enable-shutdown --port=8080 &
+SERVER_PID=$!
+
+# Wait for ready
+until curl -sf http://localhost:8080/health > /dev/null; do sleep 0.2; done
+
+# ... do your Helm work ...
+cp mychart-0.1.0.tgz ./charts/
+helm repo update local
+
+# Shut down (SIGTERM is also handled gracefully)
+curl -s -X POST http://localhost:8080/shutdown
+wait $SERVER_PID
+```
+
+---
+
+## Helm compatibility and gap analysis
+
+### Helm version support
+
+| Helm version | Status | Notes |
+|---|---|---|
+| Helm 3.x (any) | ✅ Full support | All standard commands work |
+| Helm 4.x | ✅ Full support | HTTP repo protocol is unchanged in Helm 4 |
+| Helm 2.x | ⚠️ Probably works | Untested; `apiVersion: v1` charts should index fine |
+
+### Command support
+
+| Command | Status | Notes |
+|---|---|---|
+| `helm repo add` / `update` / `remove` | ✅ | Core use case |
+| `helm search repo` | ✅ | Uses local cached index |
+| `helm install` / `upgrade` / `rollback` | ✅ | Downloads `.tgz` via URL in `index.yaml` |
+| `helm pull` / `fetch` | ✅ | |
+| `helm show chart/values/readme` | ✅ | Downloads `.tgz` locally |
+| `helm dependency update` | ✅ | Reads index, downloads dependency charts |
+| `helm cm-push` (helm-push plugin) | ✅ | `POST /api/charts` multipart |
+| `helm package` | ✅ | Local only; output `.tgz` can be copied to storage dir |
+| `helm verify` | ✅ | `.prov` files stored and served; Helm verifies client-side |
+| `helm repo add --username --password` | ✅ | HTTP Basic auth supported |
+| `helm push` (built-in, OCI) | ❌ | Requires OCI registry protocol — see below |
+| `helm registry login` | ❌ | OCI only |
+
+### Gap analysis
+
+#### `GET /server/info` — ✅ implemented
+The `helm-push` plugin and some dashboard tools probe this endpoint to confirm they are talking
+to a ChartMuseum-compatible server. Returns
+`{"version":"helmrepolite-x.y.z","storage":"local"}`.
+
+#### OCI registry protocol — ❌ not implemented
+Helm 3.8+ added a built-in `helm push` command that uses the
+[OCI Distribution Spec](https://github.com/opencontainers/distribution-spec) (Docker Registry
+v2 API), which is entirely separate from the ChartMuseum HTTP API.
+
+```sh
+# This will NOT work:
+helm push mychart-0.1.0.tgz oci://localhost:5000/charts
+
+# This WILL work (uses ChartMuseum API):
+helm cm-push mychart-0.1.0.tgz local
+```
+
+**Does Helm 4 require OCI?** No. Helm 4 continues to support the HTTP repository protocol.
+Every major public repository (Bitnami, cert-manager, ingress-nginx, etc.) uses it. OCI is an
+_additional_ distribution method, not a replacement for the classic HTTP repo.
+
+**Tradeoff if OCI were added:** Implementing the OCI Distribution Spec would require roughly as
+many new endpoints as the current server has (blob uploads, manifest push/pull, tag listing,
+`/v2/` compatibility check). It is well-defined but non-trivial, and a mature reference
+implementation (`distribution/distribution`) exists as an alternative. Per the project rules
+this warrants a discussion before committing to hand-coding it.
+
+#### CORS headers — ❌ not implemented
+Browser-based Helm tools (e.g.
+[Helm Dashboard](https://github.com/komodorio/helm-dashboard)) make XHR requests directly to
+the repository. Without `Access-Control-Allow-Origin` response headers those requests are
+blocked by the browser. The Helm CLI itself is unaffected.
+
+#### URL prefix / context path — ❌ not implemented
+If the server sits behind a reverse proxy at a sub-path (e.g. `/helm/`), chart download URLs
+in `index.yaml` will be incorrect. The `--chart-url` flag is a manual workaround for the base
+URL but does not rewrite individual chart file paths.
+
+### Non-goals (by design)
+
+| Feature | Notes |
+|---|---|
+| Cloud storage backends (S3, GCS, Azure Blob) | Local filesystem only |
+| Multi-tenancy / `--depth` | Single flat repository |
+| Server-side provenance validation | `.prov` files are stored and served; Helm verifies them client-side |
+| JWT / OAuth authentication | HTTP Basic auth only |
+| Pagination on `/api/charts` | Full index always returned |
 
 ---
 
 ## Development
 
-```bash
-# Build everything
-dotnet build
+### Prerequisites
 
-# Run the tests
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- PowerShell 7+ (for `build.ps1`)
+
+### Build, test, and publish
+
+```powershell
+# Run tests only
 dotnet test
 
-# Run the server with debug logging
+# Full build: tests + NuGet package + standalone executables for all platforms
+.\build.ps1
+
+# Stamp a specific version
+.\build.ps1 -Version 1.2.3
+```
+
+Build output in `artifacts/`:
+
+```
+artifacts/
+  nuget/
+    HelmRepoLite.1.2.3.nupkg      <- dotnet tool install -g
+  standalone/
+    win-x64/helmrepolite.exe       <- self-contained, no .NET required
+    win-arm64/helmrepolite.exe
+    linux-x64/helmrepolite
+    linux-arm64/helmrepolite
+    osx-x64/helmrepolite
+    osx-arm64/helmrepolite
+```
+
+### Run locally during development
+
+```powershell
+# From source with debug logging (F5 in Visual Studio also works)
 dotnet run --project ./src/HelmRepoLite -- --debug
 ```
 
-The `Directory.Build.props` enforces the **no-third-party-packages** rule at compile time. If you genuinely need a package, set `<AllowThirdPartyPackages>true</AllowThirdPartyPackages>` in the offending csproj and explain the trade-off in the PR.
+### Project structure
 
----
+```
+src/
+  HelmRepoLite/
+    Program.cs              Host setup and route registration
+    ChartStore.cs           In-memory index + FileSystemWatcher
+    ChartInspector.cs       Reads a .tgz, extracts Chart.yaml, computes SHA-256
+    MiniYaml.cs             Purpose-built YAML reader for the Chart.yaml subset
+    IndexBuilder.cs         Builds the in-memory index.yaml document
+    CliParser.cs            Zero-dependency CLI argument parser
+    ServerOptions.cs        Strongly-typed configuration record
+    BasicAuthMiddleware.cs  HTTP Basic auth middleware
 
-## Docs
+tests/
+  HelmRepoLite.Tests/
+    ChartInspectorTests.cs
+    ChartStoreTests.cs
+    MiniYamlTests.cs
+    CliParserTests.cs
+    TestChartBuilder.cs     Builds valid .tgz fixtures in-process
+```
 
-- [`docs/requirements.md`](docs/requirements.md) — what we're building and why
-- [`docs/design.md`](docs/design.md) — architecture, component map, key decisions
-- [`docs/cake-integration.md`](docs/cake-integration.md) — running it inside a Cake CI pipeline
-- [`CLAUDE.md`](CLAUDE.md) — instructions for Claude Code when contributing
+### Design constraints
+
+- **No third-party runtime packages.** The zero-dependency property is a first-class feature.
+  Before adding any `<PackageReference>`, read
+  [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
+- `ChartStore` is the single source of truth for the in-memory index; all mutations go through
+  its `SemaphoreSlim` mutex.
+- `index.yaml` is always fully regenerated from the in-memory state — it is never read back at
+  startup.
+- `MiniYaml` is intentionally limited to the Chart.yaml subset. It handles block scalars,
+  compact sequences, multi-line plain scalars, and quoted strings — not general YAML 1.2.
 
 ---
 

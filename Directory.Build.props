@@ -23,8 +23,20 @@
   <Target Name="ForbidThirdPartyPackages"
           BeforeTargets="ResolveAssemblyReferences"
           Condition=" '$(IsTestProject)' != 'true' AND '$(AllowThirdPartyPackages)' != 'true' ">
-    <Error Condition=" '@(PackageReference)' != '' "
-           Text="HelmRepoLite ships with zero third-party packages. Found PackageReference(s): @(PackageReference). If you really need this, set AllowThirdPartyPackages=true in the project and explain why in the PR description." />
+    <!--
+      Exclude packages that are:
+        - IsImplicitlyDefined=true  : injected by the SDK (e.g. Microsoft.NET.ILLink.Tasks
+                                      added automatically when PublishTrimmed=true)
+        - PrivateAssets=All         : build-time-only tools that are never shipped
+      Both categories are SDK infrastructure, not third-party runtime dependencies.
+    -->
+    <ItemGroup>
+      <_ShippedPackageReference Include="@(PackageReference)"
+          Condition="'%(PackageReference.IsImplicitlyDefined)' != 'true'
+                 AND '%(PackageReference.PrivateAssets)' != 'All'" />
+    </ItemGroup>
+    <Error Condition=" '@(_ShippedPackageReference)' != '' "
+           Text="HelmRepoLite ships with zero third-party packages. Found PackageReference(s): @(_ShippedPackageReference). If you really need this, set AllowThirdPartyPackages=true in the project and explain why in the PR description." />
   </Target>
 
 </Project>

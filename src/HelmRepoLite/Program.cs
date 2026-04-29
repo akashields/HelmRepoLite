@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using HelmRepoLite;
 using Microsoft.AspNetCore.Builder;
@@ -12,6 +13,21 @@ using Microsoft.Extensions.Logging;
 var (options, exitCode, message) = CliParser.Parse(args);
 if (message is not null) Console.WriteLine(message);
 if (exitCode is int ec) return ec;
+
+// ---- Validate HTTPS config early so errors surface before the host starts --
+
+X509Certificate2? httpsCert = null;
+if (options.HttpsPort > 0)
+{
+    httpsCert = LoadHttpsCertificate(options);
+    if (httpsCert is null)
+    {
+        Console.Error.WriteLine(
+            "Error: --https-port requires a certificate. " +
+            "Provide --https-cert-file, --https-cert-thumbprint, or --https-cert-subject.");
+        return 1;
+    }
+}
 
 // ---- Build host ------------------------------------------------------------
 
@@ -30,7 +46,9 @@ builder.Services.AddSingleton<ChartStore>();
 
 builder.WebHost.ConfigureKestrel(k =>
 {
-    k.ListenAnyIP(options.Port); // host filter applied below
+    k.ListenAnyIP(options.Port);
+    if (httpsCert is not null)
+        k.ListenAnyIP(options.HttpsPort, o => o.UseHttps(httpsCert));
     // Allow large chart uploads. Helm charts are usually <1 MB but charts with bundled images can be larger.
     k.Limits.MaxRequestBodySize = 256 * 1024 * 1024;
 });
@@ -78,6 +96,13 @@ app.MapGet("/charts/{fileName}", (string fileName, ChartStore s) =>
 
 // GET /health -> simple liveness check
 app.MapGet("/health", () => Results.Json(new { status = "ok" }));
+
+// GET /server/info -> ChartMuseum compatibility probe used by helm-push and dashboard tools
+app.MapGet("/server/info", () => Results.Json(new
+{
+    version = $"helmrepolite-{typeof(ServerOptions).Assembly.GetName().Version?.ToString(3) ?? "0.0.0"}",
+    storage = "local",
+}));
 
 // ---- ChartMuseum-compatible /api routes (read+write) -----------------------
 
@@ -189,21 +214,70 @@ if (!options.DisableApi)
     });
 }
 
+// ---- Shutdown endpoint (opt-in, for CI pipelines) -------------------------
+
+if (options.EnableShutdown)
+{
+    app.MapPost("/shutdown", (IHostApplicationLifetime lifetime) =>
+    {
+        app.Logger.LogInformation("Shutdown requested via POST /shutdown — stopping");
+        // Schedule StopApplication after the response is sent.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(100).ConfigureAwait(false);
+            lifetime.StopApplication();
+        });
+        return Results.Ok(new { shuttingDown = true });
+    });
+}
+
 // ---- Welcome page ----------------------------------------------------------
 
-app.MapGet("/", () => Results.Content(WelcomePage(options, baseUrl), "text/html; charset=utf-8"));
+app.MapGet("/", (ChartStore s) => Results.Content(WelcomePage(options, baseUrl, s.Snapshot()), "text/html; charset=utf-8"));
 
 app.Logger.LogInformation("HelmRepoLite listening on {Url}", baseUrl);
 app.Logger.LogInformation("  Storage: {Dir}", Path.GetFullPath(options.StorageDir));
-if (!string.IsNullOrEmpty(options.DropDir))
-    app.Logger.LogInformation("  Drop folder: {Dir}", Path.GetFullPath(options.DropDir));
+if (httpsCert is not null)
+    app.Logger.LogInformation("  HTTPS:   port {Port} · subject: {Subject}", options.HttpsPort, httpsCert.Subject);
 if (!string.IsNullOrEmpty(options.BasicAuthUser))
     app.Logger.LogInformation("  Basic auth: enabled (anonymous-get={Anon})", options.AnonymousGet);
+if (options.EnableShutdown)
+    app.Logger.LogInformation("  Shutdown endpoint: enabled (POST /shutdown)");
 
 await app.RunAsync().ConfigureAwait(false);
 return 0;
 
 // ---- helpers ---------------------------------------------------------------
+
+static X509Certificate2? LoadHttpsCertificate(ServerOptions opts)
+{
+    if (!string.IsNullOrEmpty(opts.HttpsCertFile))
+    {
+        if (!File.Exists(opts.HttpsCertFile))
+            throw new FileNotFoundException($"HTTPS certificate file not found: {opts.HttpsCertFile}");
+        return string.IsNullOrEmpty(opts.HttpsCertPassword)
+            ? X509CertificateLoader.LoadCertificateFromFile(opts.HttpsCertFile)
+            : X509CertificateLoader.LoadPkcs12FromFile(opts.HttpsCertFile, opts.HttpsCertPassword);
+    }
+    if (!string.IsNullOrEmpty(opts.HttpsCertThumbprint))
+        return FindCertInStore(X509FindType.FindByThumbprint, opts.HttpsCertThumbprint);
+    if (!string.IsNullOrEmpty(opts.HttpsCertSubject))
+        return FindCertInStore(X509FindType.FindBySubjectName, opts.HttpsCertSubject);
+    return null;
+}
+
+static X509Certificate2? FindCertInStore(X509FindType findType, string value)
+{
+    // Search CurrentUser first (dev certs live here), then LocalMachine (server certs).
+    foreach (var location in new[] { StoreLocation.CurrentUser, StoreLocation.LocalMachine })
+    {
+        using var store = new X509Store(StoreName.My, location);
+        store.Open(OpenFlags.ReadOnly);
+        var results = store.Certificates.Find(findType, value, validOnly: false);
+        if (results.Count > 0) return results[0];
+    }
+    return null;
+}
 
 static bool IsSafeName(string name)
 {
@@ -232,29 +306,155 @@ static Dictionary<string, object?> ToApiEntry(ChartMetadata c)
     return d;
 }
 
-static string WelcomePage(ServerOptions opts, string baseUrl) => $$"""
+static string WelcomePage(ServerOptions opts, string baseUrl, IReadOnlyList<ChartMetadata> charts)
+{    var byName = charts
+        .GroupBy(c => c.Name, StringComparer.Ordinal)
+        .OrderBy(g => g.Key, StringComparer.Ordinal);
+
+    var sb = new System.Text.StringBuilder();
+    foreach (var group in byName)
+    {
+        sb.Append("<details open><summary><strong>");
+        sb.Append(System.Net.WebUtility.HtmlEncode(group.Key));
+        sb.Append("</strong> <span class=\"count\">(");
+        sb.Append(group.Count());
+        sb.Append(group.Count() == 1 ? " version" : " versions");
+        sb.Append(")</span></summary><table><thead><tr><th>Version</th><th>App Version</th><th>Description</th><th>Created</th><th>Download</th><th></th></tr></thead><tbody>");
+        foreach (var c in group.OrderByDescending(c => c.Created))
+        {
+            sb.Append("<tr><td><code>");
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.Version));
+            sb.Append("</code></td><td>");
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.AppVersion ?? ""));
+            sb.Append("</td><td>");
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.Description ?? ""));
+            sb.Append("</td><td>");
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.Created.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)));
+            sb.Append("</td><td><a href=\"charts/");
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.FileName));
+            sb.Append("\">⬇ ");
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.FileName));
+            sb.Append("</a></td><td>");
+            sb.Append("<button class=\"del\" data-name=\"");
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.Name));
+            sb.Append("\" data-version=\"");
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.Version));
+            sb.Append("\">🗑 Delete</button>");
+            sb.Append("</td></tr>");
+        }
+        sb.Append("</tbody></table></details>");
+    }
+
+    var chartsHtml = charts.Count == 0
+        ? "<p class=\"empty\">No charts indexed yet. Copy a <code>.tgz</code> into the storage directory or upload via the API.</p>"
+        : sb.ToString();
+
+    return $$"""
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>HelmRepoLite</title>
-<style>
-body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-h1 { font-weight: 600; }
-code { background: #f0f0f0; padding: 0.1rem 0.3rem; border-radius: 3px; }
-pre { background: #f0f0f0; padding: 0.8rem; border-radius: 4px; overflow-x: auto; }
-a { color: #0a66c2; }
-</style></head><body>
-<h1>HelmRepoLite</h1>
-<p>A lightweight, self-hosted Helm chart repository. Compatible with the ChartMuseum HTTP API.</p>
-<p>Add this repo to Helm:</p>
-<pre>helm repo add local {{baseUrl}}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="30">
+  <title>HelmRepoLite</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    h1 { font-weight: 700; margin-bottom: 0.25rem; }
+    .subtitle { color: #555; margin-top: 0; margin-bottom: 1.5rem; }
+    h2 { font-size: 1rem; font-weight: 600; border-bottom: 1px solid #ddd; padding-bottom: 0.3rem; margin-top: 2rem; }
+    code { background: #f0f0f0; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
+    pre { background: #f0f0f0; padding: 0.8rem; border-radius: 4px; overflow-x: auto; }
+    a { color: #0a66c2; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    nav { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+    nav a { background: #f0f0f0; padding: 0.3rem 0.7rem; border-radius: 4px; font-size: 0.9em; }
+    nav a:hover { background: #e0e0e0; text-decoration: none; }
+    .meta { font-size: 0.85em; color: #555; margin-bottom: 1.5rem; }
+    details { margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 6px; }
+    summary { padding: 0.6rem 0.8rem; cursor: pointer; user-select: none; background: #fafafa; border-radius: 6px; }
+    summary::-webkit-details-marker { color: #888; }
+    details[open] summary { border-bottom: 1px solid #ddd; border-radius: 6px 6px 0 0; }
+    .count { font-weight: normal; color: #666; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+    th { text-align: left; padding: 0.4rem 0.7rem; color: #555; font-weight: 600; border-bottom: 1px solid #eee; }
+    td { padding: 0.4rem 0.7rem; border-bottom: 1px solid #f4f4f4; vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    .empty { color: #888; font-style: italic; }
+    .refresh-note { font-size: 0.8em; color: #aaa; float: right; line-height: 1; }
+    button.del { font-size: 0.8em; padding: 0.2rem 0.5rem; border: 1px solid #e0a0a0; border-radius: 3px; background: #fff4f4; color: #c00; cursor: pointer; white-space: nowrap; }
+    button.del:hover { background: #ffe0e0; }
+  </style>
+</head>
+<body>
+  <h1>HelmRepoLite</h1>
+  <p class="subtitle">A lightweight, self-hosted Helm chart repository.</p>
+
+  <nav>
+    <a href="/index.yaml">/index.yaml</a>
+    <a href="/api/charts">/api/charts</a>
+    <a href="/health">/health</a>
+    {{(opts.EnableShutdown ? "<a href=\"#\" onclick=\"shutdownServer(event)\" style=\"background:#fff4f4;color:#c00;border:1px solid #e0a0a0\">⏻ Shutdown</a>" : "")}}
+  </nav>
+
+  <div class="meta">
+    Storage: <code>{{Path.GetFullPath(opts.StorageDir)}}</code> &nbsp;&middot;&nbsp;
+    <strong>{{charts.Count}}</strong> package{{(charts.Count == 1 ? "" : "s")}} indexed
+    <span class="refresh-note">page auto-refreshes every 30 s &middot; filesystem changes are detected instantly</span>
+  </div>
+
+  <h2>Packages</h2>
+  {{chartsHtml}}
+
+  <h2>Storage</h2>
+  <p>Storage directory: <code>{{System.Net.WebUtility.HtmlEncode(Path.GetFullPath(opts.StorageDir))}}</code><br>
+  Deleting a <code>.tgz</code> from that directory removes it from the index automatically.</p>
+
+  <p><strong>Method 1 — Copy file directly (no tools required)</strong></p>
+  <pre>helm package ./mychart
+copy mychart-0.1.0.tgz {{System.Net.WebUtility.HtmlEncode(Path.GetFullPath(opts.StorageDir))}}\</pre>
+
+  <p><strong>Method 2 — HTTP upload (no plugin required)</strong></p>
+  <pre># curl
+curl --data-binary "@mychart-0.1.0.tgz" {{baseUrl}}/api/charts
+
+# PowerShell
+Invoke-RestMethod -Method POST -Uri {{baseUrl}}/api/charts `
+    -InFile mychart-0.1.0.tgz -ContentType "application/octet-stream"</pre>
+
+  <p><strong>Method 3 — helm-push plugin</strong></p>
+  <pre># Install the plugin once
+helm plugin install https://github.com/chartmuseum/helm-push
+
+# Push
+helm cm-push mychart-0.1.0.tgz local</pre>
+
+  <h2>Add to Helm</h2>
+  <pre>helm repo add local {{baseUrl}}
 helm repo update
 helm search repo local</pre>
-<p>Useful endpoints:</p>
-<ul>
-  <li><a href="/index.yaml">/index.yaml</a> &mdash; chart repository index</li>
-  <li><a href="/api/charts">/api/charts</a> &mdash; JSON list of charts (ChartMuseum API)</li>
-  <li><a href="/health">/health</a> &mdash; liveness probe</li>
-</ul>
-<p>Storage dir: <code>{{Path.GetFullPath(opts.StorageDir)}}</code></p>
-{{(string.IsNullOrEmpty(opts.DropDir) ? "" : $"<p>Drop folder: <code>{Path.GetFullPath(opts.DropDir)}</code></p>")}}
-</body></html>
+<script>
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('button.del');
+    if (!btn) return;
+    var name = btn.dataset.name, version = btn.dataset.version;
+    if (!confirm('Delete ' + name + ' ' + version + '?\n\nThis removes the .tgz file from storage and updates the index.')) return;
+    btn.disabled = true;
+    fetch('/api/charts/' + encodeURIComponent(name) + '/' + encodeURIComponent(version), { method: 'DELETE' })
+      .then(function(r) {
+        if (r.ok) { location.reload(); }
+        else { r.json().then(function(j) { alert('Delete failed: ' + (j.error || r.status)); btn.disabled = false; }); }
+      })
+      .catch(function(err) { alert('Delete failed: ' + err); btn.disabled = false; });
+  });
+  function shutdownServer(e) {
+    e.preventDefault();
+    if (!confirm('Shut down the HelmRepoLite server?\n\nThe process will exit.')) return;
+    fetch('/shutdown', { method: 'POST' })
+      .then(function() { document.body.innerHTML = '<p style="font-family:monospace;margin:2rem">Server is shutting down.</p>'; })
+      .catch(function(err) { alert('Shutdown failed: ' + err); });
+  }
+</script>
+</body>
+</html>
 """;
+}

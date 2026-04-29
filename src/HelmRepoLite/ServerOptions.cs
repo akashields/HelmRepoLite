@@ -12,14 +12,9 @@ public sealed record ServerOptions
     /// <summary>Hostname/IP to bind. Default 0.0.0.0 (all interfaces).</summary>
     public string Host { get; init; } = "0.0.0.0";
 
-    /// <summary>Root directory containing .tgz chart packages and the generated index.yaml.</summary>
+    /// <summary>Root directory containing .tgz chart packages and the generated index.yaml.
+    /// Drop .tgz files directly into this folder to have them auto-indexed.</summary>
     public string StorageDir { get; init; } = "./charts";
-
-    /// <summary>
-    /// Optional drop folder. Files placed here are auto-imported into StorageDir
-    /// (atomic rename), then the index is rebuilt. Empty string disables.
-    /// </summary>
-    public string DropDir { get; init; } = "";
 
     /// <summary>Absolute base URL used for chart download URLs in index.yaml. Auto-detected if empty.</summary>
     public string ChartUrl { get; init; } = "";
@@ -44,4 +39,37 @@ public sealed record ServerOptions
 
     /// <summary>If true, emit verbose request/operation logs.</summary>
     public bool Debug { get; init; }
+
+    /// <summary>
+    /// If true, <c>POST /shutdown</c> is mapped and a successful call gracefully stops the
+    /// process. Off by default so the endpoint cannot be hit accidentally in production.
+    /// Intended for CI pipelines that need to stop the server after their work is done.
+    /// </summary>
+    public bool EnableShutdown { get; init; }
+
+    // ---- HTTPS ---------------------------------------------------------------
+
+    /// <summary>
+    /// HTTPS port. 0 disables HTTPS (default). Requires one of the cert options below.
+    /// HTTP continues to serve on <see cref="Port"/> alongside HTTPS.
+    /// </summary>
+    public int HttpsPort { get; init; }
+
+    /// <summary>Path to a PFX/PKCS#12 certificate file for HTTPS.</summary>
+    public string HttpsCertFile { get; init; } = "";
+
+    /// <summary>Password for the PFX certificate file (empty = no password).</summary>
+    public string HttpsCertPassword { get; init; } = "";
+
+    /// <summary>
+    /// SHA-1 thumbprint of a certificate in the Windows certificate store.
+    /// Searches CurrentUser\My then LocalMachine\My.
+    /// </summary>
+    public string HttpsCertThumbprint { get; init; } = "";
+
+    /// <summary>
+    /// Subject name (or CN) of a certificate in the Windows certificate store.
+    /// Searches CurrentUser\My then LocalMachine\My.
+    /// </summary>
+    public string HttpsCertSubject { get; init; } = "";
 }

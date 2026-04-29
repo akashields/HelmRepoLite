@@ -5,6 +5,7 @@ namespace HelmRepoLite.Tests;
 public class MiniYamlTests
 {
     private static readonly string[] KeywordFixture = ["foo", "bar"];
+
     [Fact]
     public void Parse_simple_chart_yaml()
     {
@@ -88,5 +89,85 @@ public class MiniYamlTests
         Assert.NotNull(first);
         Assert.Equal("mychart", first!["name"]);
         Assert.Equal("0.1.0", first["version"]);
+    }
+
+    [Fact]
+    public void Parse_multiline_plain_scalar_does_not_break_subsequent_keys()
+    {
+        // authentik's Chart.yaml has a description that wraps onto the next line
+        // with deeper indentation — a YAML multi-line plain scalar. Without handling
+        // this, the mapping loop breaks early and 'name' is never reached.
+        var yaml = """
+            apiVersion: v2
+            description: authentik is an open-source Identity Provider focused on flexibility
+              and versatility
+            name: authentik
+            version: 2026.2.1
+            """;
+
+        var node = MiniYaml.Parse(yaml);
+
+        Assert.Equal("authentik", MiniYaml.GetString(node, "name"));
+        Assert.Equal("2026.2.1", MiniYaml.GetString(node, "version"));
+        Assert.Equal("v2", MiniYaml.GetString(node, "apiVersion"));
+    }
+
+    [Fact]
+    public void Parse_skips_block_scalars_and_reads_subsequent_keys()
+    {
+        // Real-world ArtifactHub charts have annotations with | block scalars.
+        // If the parser doesn't skip the block content, fields after annotations
+        // (including 'name') are never reached.
+        var yaml = """
+            apiVersion: v2
+            annotations:
+              artifacthub.io/changes: |
+                - kind: fixed
+                  description: Some fix
+              artifacthub.io/images: |
+                - name: authentik
+                  image: ghcr.io/goauthentik/server:2026.2.1
+            name: authentik
+            version: 2026.2.1
+            description: authentik is an open-source IdP
+            """;
+
+        var node = MiniYaml.Parse(yaml);
+
+        Assert.Equal("authentik", MiniYaml.GetString(node, "name"));
+        Assert.Equal("2026.2.1", MiniYaml.GetString(node, "version"));
+        Assert.Equal("v2", MiniYaml.GetString(node, "apiVersion"));
+        Assert.Equal("authentik is an open-source IdP", MiniYaml.GetString(node, "description"));
+    }
+
+    [Fact]
+    public void Parse_compact_sequence_notation_at_same_indent_as_key()
+    {
+        // YAML compact notation: sequence at same indent as parent key.
+        // This is what MiniYamlWriter emits for index.yaml entries.
+        var yaml = """
+            entries:
+              mychart:
+              - name: mychart
+                version: 0.1.0
+            """;
+
+        var node = MiniYaml.Parse(yaml);
+
+        var entries = MiniYaml.GetMappingList(node, "entries");
+        Assert.Null(entries); // entries is a mapping, not a list
+        if (node is System.Collections.Generic.Dictionary<string, object?> root &&
+            root["entries"] is System.Collections.Generic.Dictionary<string, object?> entriesMap &&
+            entriesMap["mychart"] is System.Collections.Generic.List<object?> versions)
+        {
+            Assert.Single(versions);
+            var first = versions[0] as System.Collections.Generic.Dictionary<string, object?>;
+            Assert.NotNull(first);
+            Assert.Equal("mychart", first!["name"]);
+        }
+        else
+        {
+            Assert.Fail("entries/mychart was not parsed as a list of mappings");
+        }
     }
 }

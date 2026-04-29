@@ -1,10 +1,12 @@
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 
 namespace HelmRepoLite;
 
 /// <summary>
-/// The core domain service. Holds the in-memory chart index, owns the storage
-/// directory, and (optionally) watches a drop folder for new packages.
+/// The core domain service. Holds the in-memory chart index and owns the storage
+/// directory. Any .tgz file added, replaced, or deleted in the storage directory
+/// is automatically detected and the index updated.
 ///
 /// Thread-safety: a single <c>SemaphoreSlim</c> serializes all mutations and
 /// index rebuilds. Reads of the rendered index.yaml bytes are lock-free via
@@ -16,8 +18,9 @@ public sealed class ChartStore : IDisposable
     private readonly ILogger<ChartStore> _logger;
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly Dictionary<string, ChartMetadata> _byFile = new(StringComparer.Ordinal);
-    private FileSystemWatcher? _dropWatcher;
+    private readonly ConcurrentDictionary<string, byte> _inFlight = new(StringComparer.OrdinalIgnoreCase);
     private FileSystemWatcher? _storageWatcher;
+    private FileSystemWatcher? _indexWatcher;
     private volatile byte[] _indexBytes = [];
     private volatile string _baseUrl = "http://localhost:8080";
 
@@ -41,36 +44,19 @@ public sealed class ChartStore : IDisposable
         finally { _mutex.Release(); }
     }
 
-    /// <summary>Initial scan of storage dir + start watchers. Call once at startup.</summary>
+    /// <summary>Initial scan of storage dir + start watcher. Call once at startup.</summary>
     public async Task InitializeAsync(string baseUrl, CancellationToken ct)
     {
         _baseUrl = baseUrl;
         Directory.CreateDirectory(_options.StorageDir);
-        if (!string.IsNullOrEmpty(_options.DropDir))
-            Directory.CreateDirectory(_options.DropDir);
 
+        _logger.LogInformation("Storage directory : {Dir}", Path.GetFullPath(_options.StorageDir));
+
+        // Full rescan: picks up any adds, changes, or deletes that happened while offline.
         await ScanStorageAsync(ct).ConfigureAwait(false);
 
-        // Watch the drop folder for newly-arrived packages.
-        if (!string.IsNullOrEmpty(_options.DropDir))
-        {
-            _dropWatcher = new FileSystemWatcher(_options.DropDir, "*.tgz")
-            {
-                EnableRaisingEvents = true,
-                IncludeSubdirectories = false,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
-            };
-            _dropWatcher.Created += (_, e) => _ = HandleDropAsync(e.FullPath);
-            _dropWatcher.Renamed += (_, e) => _ = HandleDropAsync(e.FullPath);
-            _logger.LogInformation("Watching drop folder {DropDir}", _options.DropDir);
-
-            // Also import anything already sitting there at startup.
-            foreach (var existing in Directory.EnumerateFiles(_options.DropDir, "*.tgz"))
-                await HandleDropAsync(existing).ConfigureAwait(false);
-        }
-
-        // Also watch the storage dir itself, so out-of-band copies (e.g. a CI rsync)
-        // get reflected without a server restart.
+        // Watch storage for live changes: copy/move/replace/delete a .tgz and the index
+        // updates automatically without a server restart.
         _storageWatcher = new FileSystemWatcher(_options.StorageDir, "*.tgz")
         {
             EnableRaisingEvents = true,
@@ -81,6 +67,21 @@ public sealed class ChartStore : IDisposable
         _storageWatcher.Changed += (_, e) => _ = ImportFromStorageAsync(e.FullPath);
         _storageWatcher.Renamed += (_, e) => _ = ImportFromStorageAsync(e.FullPath);
         _storageWatcher.Deleted += (_, e) => _ = HandleStorageDeleteAsync(e.FullPath);
+        _logger.LogInformation("Watching storage directory for changes");
+
+        // Watch for index.yaml deletion and regenerate it automatically.
+        _indexWatcher = new FileSystemWatcher(_options.StorageDir, "index.yaml")
+        {
+            EnableRaisingEvents = true,
+            NotifyFilter = NotifyFilters.FileName,
+        };
+        _indexWatcher.Deleted += (_, _) =>
+        {
+            _logger.LogInformation("index.yaml deleted — regenerating");
+            _mutex.Wait();
+            try { RebuildIndexLocked(); }
+            finally { _mutex.Release(); }
+        };
     }
 
     private async Task ScanStorageAsync(CancellationToken ct)
@@ -89,72 +90,55 @@ public sealed class ChartStore : IDisposable
         try
         {
             _byFile.Clear();
-            foreach (var f in Directory.EnumerateFiles(_options.StorageDir, "*.tgz"))
+            int errors = 0;
+            var files = Directory.EnumerateFiles(_options.StorageDir, "*.tgz").ToList();
+            _logger.LogInformation("Scanning storage: {Count} .tgz file(s) found", files.Count);
+            foreach (var f in files)
             {
                 if (ct.IsCancellationRequested) return;
                 try
                 {
                     var meta = ChartInspector.Inspect(f);
                     _byFile[meta.FileName] = meta;
+                    _logger.LogInformation("  [ok] {File} → {Name} {Version}", Path.GetFileName(f), meta.Name, meta.Version);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to inspect {File}, skipping", f);
+                    errors++;
+                    _logger.LogWarning("  [skip] {File} — could not be identified: {Message}", Path.GetFileName(f), ex.Message);
                 }
             }
             RebuildIndexLocked();
-            _logger.LogInformation("Indexed {Count} chart packages from {Dir}", _byFile.Count, _options.StorageDir);
+            if (errors > 0)
+                _logger.LogWarning("Startup scan complete: {Count} packages indexed, {Errors} file(s) could not be identified", _byFile.Count, errors);
+            else
+                _logger.LogInformation("Startup scan complete: {Count} packages indexed", _byFile.Count);
         }
         finally { _mutex.Release(); }
     }
 
-    /// <summary>Move a freshly-uploaded .tgz from the drop folder into storage and re-index.</summary>
-    private async Task HandleDropAsync(string fullPath)
-    {
-        try
-        {
-            // Wait briefly for the writer to finish (FileSystemWatcher fires on first byte).
-            await WaitForStableFileAsync(fullPath).ConfigureAwait(false);
-
-            var fileName = Path.GetFileName(fullPath);
-            var dest = Path.Combine(_options.StorageDir, fileName);
-
-            // Inspect first - reject malformed packages without polluting storage.
-            var meta = ChartInspector.Inspect(fullPath);
-
-            await _mutex.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                if (_byFile.ContainsKey(fileName) && !_options.AllowOverwrite)
-                {
-                    _logger.LogWarning("Drop {File} ignored: version already exists (use --allow-overwrite)", fileName);
-                    return;
-                }
-
-                // Atomic move (same volume); falls back to copy+delete across volumes.
-                File.Move(fullPath, dest, overwrite: true);
-                meta = meta with { FileName = fileName, Created = DateTimeOffset.UtcNow };
-                _byFile[fileName] = meta;
-                RebuildIndexLocked();
-                _logger.LogInformation("Imported {File} from drop folder", fileName);
-            }
-            finally { _mutex.Release(); }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to import dropped file {Path}", fullPath);
-        }
-    }
-
     private async Task ImportFromStorageAsync(string fullPath)
     {
+        // Windows FileSystemWatcher fires multiple events per file operation (Created + Changed).
+        // Use an in-flight set to coalesce concurrent calls for the same path.
+        if (!_inFlight.TryAdd(fullPath, 0)) return;
         try
         {
             await WaitForStableFileAsync(fullPath).ConfigureAwait(false);
             if (!File.Exists(fullPath)) return;
 
             var fileName = Path.GetFileName(fullPath);
-            var meta = ChartInspector.Inspect(fullPath);
+            _logger.LogInformation("Storage change detected: {File} — re-indexing", fileName);
+            ChartMetadata meta;
+            try
+            {
+                meta = ChartInspector.Inspect(fullPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("  [skip] {File} — could not be identified: {Message}", fileName, ex.Message);
+                return;
+            }
 
             await _mutex.WaitAsync().ConfigureAwait(false);
             try
@@ -169,11 +153,16 @@ public sealed class ChartStore : IDisposable
         {
             _logger.LogWarning(ex, "Storage import skipped {Path}", fullPath);
         }
+        finally
+        {
+            _inFlight.TryRemove(fullPath, out _);
+        }
     }
 
     private async Task HandleStorageDeleteAsync(string fullPath)
     {
         var fileName = Path.GetFileName(fullPath);
+        _logger.LogInformation("Storage deletion detected: {File}", fileName);
         await _mutex.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -332,8 +321,8 @@ public sealed class ChartStore : IDisposable
 
     public void Dispose()
     {
-        _dropWatcher?.Dispose();
         _storageWatcher?.Dispose();
+        _indexWatcher?.Dispose();
         _mutex.Dispose();
     }
 }

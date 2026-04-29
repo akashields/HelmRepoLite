@@ -74,12 +74,19 @@ public static class CliParser
             return (new ServerOptions(), 2, "invalid --port value");
         }
 
+        int httpsPort = 0;
+        var httpsPortRaw = Get("https-port", "");
+        if (!string.IsNullOrEmpty(httpsPortRaw))
+        {
+            try { httpsPort = int.Parse(httpsPortRaw, CultureInfo.InvariantCulture); }
+            catch { return (new ServerOptions(), 2, "invalid --https-port value"); }
+        }
+
         var opts = new ServerOptions
         {
             Port = port,
             Host = Get("host", "0.0.0.0"),
             StorageDir = Get("storage-dir", "./charts"),
-            DropDir = Get("drop-dir", ""),
             ChartUrl = Get("chart-url", ""),
             BasicAuthUser = Get("basic-auth-user", ""),
             BasicAuthPass = Get("basic-auth-pass", ""),
@@ -88,6 +95,12 @@ public static class CliParser
             DisableDelete = GetFlag("disable-delete"),
             DisableApi = GetFlag("disable-api"),
             Debug = GetFlag("debug"),
+            EnableShutdown = GetFlag("enable-shutdown"),
+            HttpsPort = httpsPort,
+            HttpsCertFile = Get("https-cert-file", ""),
+            HttpsCertPassword = Get("https-cert-password", ""),
+            HttpsCertThumbprint = Get("https-cert-thumbprint", ""),
+            HttpsCertSubject = Get("https-cert-subject", ""),
         };
 
         return (opts, null, null);
@@ -103,7 +116,11 @@ public static class CliParser
           --port <int>             TCP port to listen on (default: 8080)
           --host <ip>              Bind address (default: 0.0.0.0)
           --storage-dir <path>     Directory holding .tgz files and index.yaml (default: ./charts)
-          --drop-dir <path>        Folder watched for new .tgz files; auto-imported (default: disabled)
+          --https-port <int>       HTTPS port; requires one cert option below (default: disabled)
+          --https-cert-file <path> Path to a PFX/PKCS#12 certificate file
+          --https-cert-password <s> Password for the PFX file (default: empty)
+          --https-cert-thumbprint <s> Certificate thumbprint in the Windows cert store
+          --https-cert-subject <s> Certificate subject/CN in the Windows cert store
           --chart-url <url>        Absolute base URL for chart downloads in index.yaml
           --basic-auth-user <s>    Enable HTTP Basic auth username (empty disables)
           --basic-auth-pass <s>    HTTP Basic auth password
@@ -111,6 +128,7 @@ public static class CliParser
           --allow-overwrite        Allow re-uploading an existing chart version without ?force=true
           --disable-delete         Disable DELETE /api/charts/{name}/{version}
           --disable-api            Disable all /api routes (read-only mode)
+          --enable-shutdown        Enable POST /shutdown to stop the process (for CI pipelines)
           --debug                  Verbose logging
           -h, --help               Show this help
           -v, --version            Show version

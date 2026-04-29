@@ -140,16 +140,83 @@ internal static class MiniYaml
             if (after.Length == 0)
             {
                 i++;
+                // YAML compact notation: a block sequence may begin at the *same*
+                // indentation as the mapping key that owns it, e.g.:
+                //   mychart:
+                //   - name: mychart   ← same indent as key, not deeper
+                // Detect this case before falling into the strict-deeper ParseNode.
+                var ni = i;
+                while (ni < lines.Count && IsBlank(lines[ni])) ni++;
+                if (ni < lines.Count)
+                {
+                    var nextInd = MeasureIndent(lines[ni]);
+                    var nextContent = lines[ni][nextInd..];
+                    if (nextInd == indent && (nextContent.StartsWith("- ", StringComparison.Ordinal) || nextContent == "-"))
+                    {
+                        map[key] = ParseSequence(lines, ref i, indent);
+                        continue;
+                    }
+                }
                 var child = ParseNode(lines, ref i, indent);
                 map[key] = child;
+            }
+            else if (IsBlockScalarIndicator(after))
+            {
+                // Literal (|) or folded (>) block scalar: the content lines are at a greater
+                // indentation. Consume them so the outer mapping continues normally.
+                // We don't need the actual text for index.yaml metadata purposes.
+                i++;
+                SkipBlockScalarLines(lines, ref i, indent);
+                map[key] = null;
             }
             else
             {
                 map[key] = ParseScalar(after);
                 i++;
+                // Skip multi-line plain scalar continuation lines. In YAML, a plain scalar
+                // can flow onto subsequent lines that are indented more than the mapping:
+                //   description: some long text that wraps
+                //     onto the next line          ← indent > mapping indent, not a new key
+                // Without skipping these, the mapping loop sees indent mismatch and breaks
+                // early, losing all subsequent keys (including 'name').
+                while (i < lines.Count && !IsBlank(lines[i]) && MeasureIndent(lines[i]) > indent)
+                    i++;
             }
         }
         return map;
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="s"/> is a YAML block scalar indicator:
+    /// <c>|</c> or <c>&gt;</c> optionally followed by chomping (<c>-</c>/<c>+</c>)
+    /// and/or an explicit indentation digit.
+    /// </summary>
+    private static bool IsBlockScalarIndicator(string s)
+    {
+        if (s.Length == 0 || (s[0] != '|' && s[0] != '>')) return false;
+        for (int k = 1; k < s.Length; k++)
+        {
+            var c = s[k];
+            if (c is '-' or '+' or >= '1' and <= '9') continue;
+            return false; // unexpected character — not a block scalar
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Skips all lines that belong to a block scalar's content: blank lines
+    /// interspersed within it, and any lines indented more than
+    /// <paramref name="mappingIndent"/> (the indent of the enclosing mapping keys).
+    /// </summary>
+    private static void SkipBlockScalarLines(List<string> lines, ref int i, int mappingIndent)
+    {
+        while (i < lines.Count)
+        {
+            var line = lines[i];
+            if (IsBlank(line)) { i++; continue; }
+            if (MeasureIndent(line) > mappingIndent) { i++; continue; }
+            break;
+        }
     }
 
     /// <summary>Find a top-level ": " (or trailing ":") that separates a mapping key from value, ignoring quotes.</summary>
