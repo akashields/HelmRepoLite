@@ -94,6 +94,16 @@ app.MapGet("/charts/{fileName}", (string fileName, ChartStore s) =>
     return Results.File(path, contentType, fileName);
 });
 
+// GET /charts/{name}/{version}/readme -> rendered HTML README page for browser viewing
+app.MapGet("/charts/{name}/{version}/readme", (string name, string version, ChartStore s) =>
+{
+    if (!IsSafeName(name) || !IsSafeName(version)) return Results.NotFound();
+    var meta = s.FindVersion(name, version);
+    if (meta is null) return Results.NotFound();
+    var markdown = ChartInspector.ReadReadme(s.GetTgzPath(meta.FileName)) ?? GenerateFallbackReadme(meta);
+    return Results.Content(ReadmePage(meta, markdown), "text/html; charset=utf-8");
+});
+
 // GET /health -> simple liveness check
 app.MapGet("/health", () => Results.Json(new { status = "ok" }));
 
@@ -136,15 +146,13 @@ if (!options.DisableApi)
             : Results.Json(ToApiEntry(meta));
     });
 
-    // GET /api/charts/{name}/{version}/readme -> README.md from the chart package (text/markdown)
+    // GET /api/charts/{name}/{version}/readme -> README.md from the chart package, or a generated fallback
     api.MapGet("/charts/{name}/{version}/readme", (string name, string version, ChartStore s) =>
     {
         var meta = s.FindVersion(name, version);
-        if (meta is null) return Results.NotFound(new { error = "chart version not found" });
-        var readme = ChartInspector.ReadReadme(s.GetTgzPath(meta.FileName));
-        return readme is null
-            ? Results.NotFound(new { error = "this chart has no README.md" })
-            : Results.Content(readme, "text/markdown; charset=utf-8");
+        if (meta is null) return Results.NotFound();
+        var readme = ChartInspector.ReadReadme(s.GetTgzPath(meta.FileName)) ?? GenerateFallbackReadme(meta);
+        return Results.Content(readme, "text/markdown; charset=utf-8");
     });
 
     // POST /api/charts -> upload a new chart (raw body OR multipart with field "chart")
@@ -317,6 +325,85 @@ static Dictionary<string, object?> ToApiEntry(ChartMetadata c)
     return d;
 }
 
+static string ReadmePage(ChartMetadata meta, string markdown)
+{
+    var title = System.Net.WebUtility.HtmlEncode($"{meta.Name} {meta.Version}");
+    var body = MarkdownRenderer.ToHtml(markdown);
+    return $$"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{title}} — README</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 1.5rem 2rem; color: #222; line-height: 1.6; }
+    nav { font-family: ui-monospace, monospace; font-size: 0.85em; margin-bottom: 1.5rem; }
+    nav a { color: #0a66c2; text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+    h1,h2,h3,h4,h5,h6 { margin-top: 1.5rem; margin-bottom: 0.4rem; line-height: 1.3; }
+    h1 { font-size: 1.8rem; border-bottom: 2px solid #eee; padding-bottom: 0.3rem; }
+    h2 { font-size: 1.3rem; border-bottom: 1px solid #eee; padding-bottom: 0.2rem; }
+    p { margin: 0.7rem 0; }
+    a { color: #0a66c2; }
+    code { font-family: ui-monospace, monospace; background: #f0f0f0; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.88em; }
+    pre { background: #f6f8fa; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1rem; overflow-x: auto; }
+    pre code { background: none; padding: 0; font-size: 0.85em; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.9em; table-layout: fixed; }
+    th { background: #f6f8fa; text-align: left; padding: 0.45rem 0.7rem; border: 1px solid #ddd; font-weight: 600; overflow-wrap: break-word; }
+    td { padding: 0.4rem 0.7rem; border: 1px solid #ddd; vertical-align: top; overflow-wrap: break-word; word-break: break-word; }
+    th:nth-child(1), td:nth-child(1) { width: 24%; }
+    th:nth-child(2), td:nth-child(2) { width: 7%; }
+    th:nth-child(3), td:nth-child(3) { width: 20%; }
+    tr:nth-child(even) td { background: #fafafa; }
+    ul,ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    li { margin: 0.2rem 0; }
+    hr { border: none; border-top: 1px solid #ddd; margin: 1.5rem 0; }
+    img { max-width: 100%; height: auto; }
+  </style>
+</head>
+<body>
+  <nav><a href="/">← HelmRepoLite</a></nav>
+  {{body}}
+</body>
+</html>
+""";
+}
+
+static string GenerateFallbackReadme(ChartMetadata meta)
+{
+    var sb = new System.Text.StringBuilder();
+    sb.Append("# ").AppendLine(meta.Name);
+    sb.AppendLine();
+    if (!string.IsNullOrEmpty(meta.Description))
+    {
+        sb.AppendLine(meta.Description);
+        sb.AppendLine();
+    }
+    if (!string.IsNullOrEmpty(meta.AppVersion))
+    {
+        sb.Append("**App version:** ").AppendLine(meta.AppVersion);
+        sb.AppendLine();
+    }
+    sb.AppendLine("## Installation");
+    sb.AppendLine();
+    sb.AppendLine("```bash");
+    sb.Append("helm install ").Append(meta.Name).Append(" <repo>/").Append(meta.Name)
+      .Append(" --version ").AppendLine(meta.Version);
+    sb.AppendLine("```");
+    sb.AppendLine();
+    sb.AppendLine("## Upgrade");
+    sb.AppendLine();
+    sb.AppendLine("```bash");
+    sb.Append("helm upgrade ").Append(meta.Name).Append(" <repo>/").Append(meta.Name)
+      .Append(" --version ").AppendLine(meta.Version);
+    sb.AppendLine("```");
+    sb.AppendLine();
+    sb.AppendLine("---");
+    sb.AppendLine("*No README.md was found in this chart package.*");
+    return sb.ToString();
+}
+
 static string WelcomePage(ServerOptions opts, string baseUrl, IReadOnlyList<ChartMetadata> charts)
 {    var byName = charts
         .GroupBy(c => c.Name, StringComparer.Ordinal)
@@ -345,7 +432,7 @@ static string WelcomePage(ServerOptions opts, string baseUrl, IReadOnlyList<Char
             sb.Append(System.Net.WebUtility.HtmlEncode(c.FileName));
             sb.Append("\">⬇ ");
             sb.Append(System.Net.WebUtility.HtmlEncode(c.FileName));
-            sb.Append("</a></td><td><a href=\"api/charts/");
+            sb.Append("</a></td><td><a href=\"charts/");
             sb.Append(System.Net.WebUtility.HtmlEncode(c.Name));
             sb.Append('/');
             sb.Append(System.Net.WebUtility.HtmlEncode(c.Version));
