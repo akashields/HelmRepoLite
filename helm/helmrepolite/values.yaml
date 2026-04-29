@@ -2,114 +2,139 @@
 # HelmRepoLite — Helm Chart values
 # ---------------------------------------------------------------------------
 
-# -- Image ------------------------------------------------------------------
+# -- Container image configuration.
 image:
-  repository: ""         # e.g. ghcr.io/myorg/helmrepolite  (required)
-  tag: ""                # defaults to .Chart.AppVersion
+  # -- Image repository. Example: `ghcr.io/myorg/helmrepolite` (**required**).
+  repository: ""
+  # -- Image tag. Defaults to `.Chart.AppVersion` when empty.
+  tag: ""
+  # -- Image [pull policy](https://kubernetes.io/docs/concepts/containers/images/#image-pull-policies).
   pullPolicy: IfNotPresent
 
+# -- Image pull secrets for private registries.
 imagePullSecrets: []
-#  - name: my-registry-secret
 
+# -- Override the chart name component of generated resource names.
 nameOverride: ""
+# -- Override the full resource name prefix.
 fullnameOverride: ""
 
-# -- Replicas ---------------------------------------------------------------
+# -- Number of pod replicas.
 replicaCount: 1
 
-# -- Server configuration ---------------------------------------------------
-# Each key maps directly to a --flag / HELMREPOLITE_* env var.
+# -- Server configuration. Each key maps to a CLI flag or `HELMREPOLITE_*` environment variable.
 server:
 
-  # Core
+  # -- HTTP listen port.
   port: 8080
+  # -- Listen address.
   host: "0.0.0.0"
+  # -- Path inside the container where `.tgz` chart files are stored.
   storageDir: /charts
 
-  # External base URL written into index.yaml for chart download links.
-  # Leave empty to auto-detect from ingress.host (recommended).
-  # Must be set manually when deploying at a URL sub-path (e.g. /helm)
-  # because the server does not support path prefixes natively.
+  # -- External base URL written into `index.yaml` for chart download links.
+  # Auto-detected from `ingress.host` when empty. Set manually when the ingress
+  # uses a non-standard port or a path prefix.
   chartUrl: ""
 
+  # -- Enable verbose debug logging.
   debug: false
 
-  # API behaviour
+  # -- Allow re-uploading an existing chart version.
   allowOverwrite: false
+  # -- Disable the `DELETE /api/charts/{name}/{version}` endpoint.
   disableDelete: false
+  # -- Disable all `/api/*` routes (index and download still work).
   disableApi: false
 
-  # Graceful shutdown endpoint (POST /shutdown).
-  # Enable only in ephemeral CI environments — disable for persistent deployments.
+  # -- Enable `POST /shutdown` endpoint. For ephemeral CI environments only —
+  # disable for persistent deployments.
   enableShutdown: false
 
-  # -- Basic auth -----------------------------------------------------------
+  # -- HTTP Basic authentication settings.
   auth:
+    # -- Enable HTTP Basic authentication.
     enabled: false
-    # Plain-text credentials (stored in a generated k8s Secret).
+    # -- Basic-auth username (stored in a generated Kubernetes Secret).
     username: ""
+    # -- Basic-auth password (stored in a generated Kubernetes Secret).
     password: ""
-    # OR reference an existing Secret instead:
-    existingSecret: ""     # secret must contain the keys below
+    # -- Name of an existing Secret to use instead of generating one.
+    # The Secret must contain the keys specified by `usernameKey` and `passwordKey`.
+    existingSecret: ""
+    # -- Key in `existingSecret` that holds the username.
     usernameKey: username
+    # -- Key in `existingSecret` that holds the password.
     passwordKey: password
-    # Require auth on GET routes too (default: anonymous reads allowed)
+    # -- Require authentication on GET routes. When `false`, anonymous reads are allowed.
     requireAuthGet: false
 
-  # -- HTTPS ----------------------------------------------------------------
-  # In most Kubernetes deployments TLS is terminated at the ingress level.
-  # Enable pod-level HTTPS only when you need end-to-end encryption or are
+  # -- Pod-level HTTPS settings. In most Kubernetes deployments TLS is terminated
+  # at the ingress. Enable only when you need end-to-end encryption or are
   # bypassing the ingress entirely.
   https:
+    # -- Enable HTTPS on the pod.
     enabled: false
+    # -- HTTPS listen port.
     port: 8443
-    # Reference a k8s Secret that contains a PFX/PKCS#12 certificate file.
-    # The secret is mounted at /certs/ inside the container.
-    certSecretName: ""       # name of the k8s Secret
-    certSecretKey: cert.pfx  # key within the secret that holds the PFX bytes
-    # Password for the PFX file (stored in the same secret under this key).
-    # Leave empty if the certificate has no password.
-    certPasswordKey: cert-password  # key in certSecretName for the password
+    # -- Name of a Kubernetes Secret containing a PFX/PKCS#12 certificate file
+    # (mounted at `/certs/` inside the container).
+    certSecretName: ""
+    # -- Key within `certSecretName` that holds the PFX bytes.
+    certSecretKey: cert.pfx
+    # -- Key within `certSecretName` that holds the PFX password. Leave empty if
+    # the certificate has no password.
+    certPasswordKey: cert-password
 
-# -- Persistent storage -----------------------------------------------------
+# -- Persistent storage for chart packages.
 persistence:
+  # -- Create a PersistentVolumeClaim for chart storage.
   enabled: true
-  storageClass: ""       # leave empty to use the cluster default
+  # -- Storage class name. Uses the cluster default when empty.
+  storageClass: ""
+  # -- PVC access mode.
   accessMode: ReadWriteOnce
+  # -- PVC size.
   size: 10Gi
-  existingClaim: ""      # use a pre-existing PVC instead of creating one
+  # -- Use a pre-existing PVC instead of creating one.
+  existingClaim: ""
 
-# -- Service ----------------------------------------------------------------
+# -- Kubernetes Service configuration.
 service:
+  # -- Service type.
   type: ClusterIP
+  # -- Service port.
   port: 80
 
-# -- Ingress ----------------------------------------------------------------
-# IMPORTANT — sub-path deployments are NOT supported.
-# HelmRepoLite must be deployed at the root of a hostname (e.g. helm.example.com)
-# because there is no built-in URL path prefix support.
-# If you must use a sub-path, set server.chartUrl to the full external URL manually.
+# -- Ingress configuration.
+# **Note:** sub-path deployments (e.g. `example.com/helm`) are not supported.
+# Deploy HelmRepoLite at the root of a hostname. If a sub-path is unavoidable,
+# set `server.chartUrl` to the full external URL manually.
 ingress:
+  # -- Create an Ingress resource.
   enabled: false
+  # -- Ingress class name.
   className: nginx
-  host: ""               # e.g. helm.example.com  (required when enabled)
+  # -- Hostname for the Ingress rule (**required** when `enabled: true`).
+  host: ""
+  # -- URL path.
   path: /
+  # -- Path type.
   pathType: Prefix
-
-  # nginx-specific body size limit — must accommodate the largest chart you upload.
-  # Matches the server's 256 MiB request limit.
+  # -- nginx `proxy-body-size` annotation value. Must accommodate the largest
+  # chart you intend to upload (server hard limit is 256 MiB).
   proxyBodySize: 256m
-
-  # Additional annotations merged with the defaults above.
+  # -- Additional annotations merged onto the Ingress resource.
   annotations: {}
-  #  nginx.ingress.kubernetes.io/auth-type: basic
-  #  nginx.ingress.kubernetes.io/auth-secret: my-htpasswd-secret
-
+  # -- TLS configuration for the Ingress.
   tls:
+    # -- Enable TLS on the Ingress.
     enabled: false
-    secretName: ""       # k8s TLS Secret (cert + key); required when tls.enabled
+    # -- Name of the Kubernetes TLS Secret containing the certificate and key.
+    secretName: ""
 
-# -- Resources --------------------------------------------------------------
+# -- CPU and memory resource requests and limits for the server container.
+# @default -- `{}`
 resources: {}
 #  requests:
 #    cpu: 50m
@@ -118,12 +143,17 @@ resources: {}
 #    cpu: 500m
 #    memory: 256Mi
 
-# -- Pod configuration ------------------------------------------------------
+# -- Annotations added to every pod.
 podAnnotations: {}
 
+# -- Pod-level security context.
+# @default -- `{fsGroup: 1001}`
 podSecurityContext:
-  fsGroup: 1001          # ensures the chart storage volume is writable by the app user
+  # Ensures the chart storage volume is writable by the app user.
+  fsGroup: 1001
 
+# -- Container-level security context.
+# @default -- see values.yaml
 securityContext:
   runAsNonRoot: true
   runAsUser: 1001
@@ -134,19 +164,32 @@ securityContext:
     drop:
       - ALL
 
+# -- Node selector constraints for pod scheduling.
 nodeSelector: {}
+# -- Tolerations for pod scheduling.
 tolerations: []
+# -- Affinity rules for pod scheduling.
 affinity: {}
 
-# -- Liveness / readiness probes --------------------------------------------
+# -- Liveness and readiness probe timings.
 probes:
+  # -- Liveness probe settings.
   liveness:
+    # -- Seconds to wait before the first liveness check.
     initialDelaySeconds: 5
+    # -- Seconds between liveness checks.
     periodSeconds: 30
+    # -- Seconds before a liveness check times out.
     timeoutSeconds: 3
+    # -- Consecutive failures before the pod is restarted.
     failureThreshold: 3
+  # -- Readiness probe settings.
   readiness:
+    # -- Seconds to wait before the first readiness check.
     initialDelaySeconds: 3
+    # -- Seconds between readiness checks.
     periodSeconds: 10
+    # -- Seconds before a readiness check times out.
     timeoutSeconds: 3
+    # -- Consecutive failures before the pod is removed from service.
     failureThreshold: 3
