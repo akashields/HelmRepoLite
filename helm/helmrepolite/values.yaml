@@ -1,0 +1,152 @@
+# ---------------------------------------------------------------------------
+# HelmRepoLite — Helm Chart values
+# ---------------------------------------------------------------------------
+
+# -- Image ------------------------------------------------------------------
+image:
+  repository: ""         # e.g. ghcr.io/myorg/helmrepolite  (required)
+  tag: ""                # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+#  - name: my-registry-secret
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Replicas ---------------------------------------------------------------
+replicaCount: 1
+
+# -- Server configuration ---------------------------------------------------
+# Each key maps directly to a --flag / HELMREPOLITE_* env var.
+server:
+
+  # Core
+  port: 8080
+  host: "0.0.0.0"
+  storageDir: /charts
+
+  # External base URL written into index.yaml for chart download links.
+  # Leave empty to auto-detect from ingress.host (recommended).
+  # Must be set manually when deploying at a URL sub-path (e.g. /helm)
+  # because the server does not support path prefixes natively.
+  chartUrl: ""
+
+  debug: false
+
+  # API behaviour
+  allowOverwrite: false
+  disableDelete: false
+  disableApi: false
+
+  # Graceful shutdown endpoint (POST /shutdown).
+  # Enable only in ephemeral CI environments — disable for persistent deployments.
+  enableShutdown: false
+
+  # -- Basic auth -----------------------------------------------------------
+  auth:
+    enabled: false
+    # Plain-text credentials (stored in a generated k8s Secret).
+    username: ""
+    password: ""
+    # OR reference an existing Secret instead:
+    existingSecret: ""     # secret must contain the keys below
+    usernameKey: username
+    passwordKey: password
+    # Require auth on GET routes too (default: anonymous reads allowed)
+    requireAuthGet: false
+
+  # -- HTTPS ----------------------------------------------------------------
+  # In most Kubernetes deployments TLS is terminated at the ingress level.
+  # Enable pod-level HTTPS only when you need end-to-end encryption or are
+  # bypassing the ingress entirely.
+  https:
+    enabled: false
+    port: 8443
+    # Reference a k8s Secret that contains a PFX/PKCS#12 certificate file.
+    # The secret is mounted at /certs/ inside the container.
+    certSecretName: ""       # name of the k8s Secret
+    certSecretKey: cert.pfx  # key within the secret that holds the PFX bytes
+    # Password for the PFX file (stored in the same secret under this key).
+    # Leave empty if the certificate has no password.
+    certPasswordKey: cert-password  # key in certSecretName for the password
+
+# -- Persistent storage -----------------------------------------------------
+persistence:
+  enabled: true
+  storageClass: ""       # leave empty to use the cluster default
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  existingClaim: ""      # use a pre-existing PVC instead of creating one
+
+# -- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+
+# -- Ingress ----------------------------------------------------------------
+# IMPORTANT — sub-path deployments are NOT supported.
+# HelmRepoLite must be deployed at the root of a hostname (e.g. helm.example.com)
+# because there is no built-in URL path prefix support.
+# If you must use a sub-path, set server.chartUrl to the full external URL manually.
+ingress:
+  enabled: false
+  className: nginx
+  host: ""               # e.g. helm.example.com  (required when enabled)
+  path: /
+  pathType: Prefix
+
+  # nginx-specific body size limit — must accommodate the largest chart you upload.
+  # Matches the server's 256 MiB request limit.
+  proxyBodySize: 256m
+
+  # Additional annotations merged with the defaults above.
+  annotations: {}
+  #  nginx.ingress.kubernetes.io/auth-type: basic
+  #  nginx.ingress.kubernetes.io/auth-secret: my-htpasswd-secret
+
+  tls:
+    enabled: false
+    secretName: ""       # k8s TLS Secret (cert + key); required when tls.enabled
+
+# -- Resources --------------------------------------------------------------
+resources: {}
+#  requests:
+#    cpu: 50m
+#    memory: 64Mi
+#  limits:
+#    cpu: 500m
+#    memory: 256Mi
+
+# -- Pod configuration ------------------------------------------------------
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 1001          # ensures the chart storage volume is writable by the app user
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Liveness / readiness probes --------------------------------------------
+probes:
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 30
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 3
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3

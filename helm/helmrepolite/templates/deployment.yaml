@@ -1,0 +1,165 @@
+{{- include "helmrepolite.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helmrepolite.fullname" . }}
+  labels:
+    {{- include "helmrepolite.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "helmrepolite.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "helmrepolite.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+            {{- if .Values.server.https.enabled }}
+            - name: https
+              containerPort: {{ .Values.server.https.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            # ---- Core -------------------------------------------------------
+            - name: HELMREPOLITE_PORT
+              value: {{ .Values.server.port | quote }}
+            - name: HELMREPOLITE_HOST
+              value: {{ .Values.server.host | quote }}
+            - name: HELMREPOLITE_STORAGE_DIR
+              value: {{ .Values.server.storageDir | quote }}
+            {{- $chartUrl := include "helmrepolite.chartUrl" . }}
+            {{- if $chartUrl }}
+            - name: HELMREPOLITE_CHART_URL
+              value: {{ $chartUrl | quote }}
+            {{- end }}
+            {{- if .Values.server.debug }}
+            - name: HELMREPOLITE_DEBUG
+              value: "true"
+            {{- end }}
+            # ---- API behaviour ----------------------------------------------
+            {{- if .Values.server.allowOverwrite }}
+            - name: HELMREPOLITE_ALLOW_OVERWRITE
+              value: "true"
+            {{- end }}
+            {{- if .Values.server.disableDelete }}
+            - name: HELMREPOLITE_DISABLE_DELETE
+              value: "true"
+            {{- end }}
+            {{- if .Values.server.disableApi }}
+            - name: HELMREPOLITE_DISABLE_API
+              value: "true"
+            {{- end }}
+            {{- if .Values.server.enableShutdown }}
+            - name: HELMREPOLITE_ENABLE_SHUTDOWN
+              value: "true"
+            {{- end }}
+            # ---- Basic auth -------------------------------------------------
+            {{- if .Values.server.auth.enabled }}
+            - name: HELMREPOLITE_BASIC_AUTH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "helmrepolite.authSecretName" . }}
+                  key: {{ .Values.server.auth.usernameKey }}
+            - name: HELMREPOLITE_BASIC_AUTH_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "helmrepolite.authSecretName" . }}
+                  key: {{ .Values.server.auth.passwordKey }}
+            {{- if .Values.server.auth.requireAuthGet }}
+            - name: HELMREPOLITE_REQUIRE_AUTH_GET
+              value: "true"
+            {{- end }}
+            {{- end }}
+            # ---- HTTPS (pod-level, usually not needed with ingress TLS) ------
+            {{- if .Values.server.https.enabled }}
+            - name: HELMREPOLITE_HTTPS_PORT
+              value: {{ .Values.server.https.port | quote }}
+            {{- if .Values.server.https.certSecretName }}
+            - name: HELMREPOLITE_HTTPS_CERT_FILE
+              value: {{ printf "/certs/%s" .Values.server.https.certSecretKey | quote }}
+            - name: HELMREPOLITE_HTTPS_CERT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.server.https.certSecretName }}
+                  key: {{ .Values.server.https.certPasswordKey }}
+                  optional: true
+            {{- end }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          volumeMounts:
+            - name: chart-storage
+              mountPath: {{ .Values.server.storageDir }}
+            {{- if and .Values.server.https.enabled .Values.server.https.certSecretName }}
+            - name: https-cert
+              mountPath: /certs
+              readOnly: true
+            {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: chart-storage
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "helmrepolite.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if and .Values.server.https.enabled .Values.server.https.certSecretName }}
+        - name: https-cert
+          secret:
+            secretName: {{ .Values.server.https.certSecretName }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

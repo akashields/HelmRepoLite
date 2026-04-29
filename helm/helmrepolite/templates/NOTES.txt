@@ -1,0 +1,37 @@
+{{- $chartUrl := include "helmrepolite.chartUrl" . }}
+HelmRepoLite is running.
+
+{{- if .Values.ingress.enabled }}
+
+  Repository URL (add to Helm):
+    {{ $chartUrl }}
+
+  helm repo add {{ .Release.Name }} {{ $chartUrl }}
+  helm repo update
+  helm search repo {{ .Release.Name }}
+
+{{- else }}
+
+  The service is not exposed via ingress. To access it locally:
+
+    kubectl port-forward svc/{{ include "helmrepolite.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+
+  Then:
+    helm repo add {{ .Release.Name }} http://localhost:8080
+    helm repo update
+
+{{- end }}
+
+  Upload a chart (no plugin required):
+    # Copy into storage (auto-indexed):
+    kubectl cp mychart-0.1.0.tgz {{ .Release.Namespace }}/$(kubectl get pod -l app.kubernetes.io/name={{ include "helmrepolite.name" . }} -n {{ .Release.Namespace }} -o jsonpath='{.items[0].metadata.name}'):{{ .Values.server.storageDir }}/mychart-0.1.0.tgz
+
+    # HTTP upload:
+    curl --data-binary "@mychart-0.1.0.tgz" {{ $chartUrl | default "http://<host>" }}/api/charts
+
+    # helm-push plugin:
+    helm plugin install https://github.com/chartmuseum/helm-push
+    helm cm-push mychart-0.1.0.tgz {{ .Release.Name }}
+
+  Browser UI:
+    {{ $chartUrl | default "http://<host>" }}/

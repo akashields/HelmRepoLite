@@ -6,8 +6,8 @@ Helm chart repository server written in .NET 10.
 **Key properties**
 - **Zero third-party runtime dependencies** — Kestrel, minimal APIs, FileSystemWatcher, and
   `System.Formats.Tar` all ship with the .NET SDK/runtime.
-- **Two distribution models** — install as a `dotnet` global tool *or* run as a fully
-  self-contained, single-file executable that needs no .NET runtime at all.
+- **Three distribution models** — install as a `dotnet` global tool, run as a fully
+  self-contained executable (no .NET required), or deploy as a container in Docker/Kubernetes.
 - **Live filesystem sync** — copy, replace, or delete a `.tgz` in the storage directory and the
   index updates automatically; no restart required.
 - **Browser UI** — navigate to `/` to browse packages, download charts, and delete versions.
@@ -233,6 +233,216 @@ helm repo update local
 # Shut down (SIGTERM is also handled gracefully)
 curl -s -X POST http://localhost:8080/shutdown
 wait $SERVER_PID
+```
+
+---
+
+## Container (Docker)
+
+### Prerequisites
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) — to run `build.ps1`
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with WSL 2 integration enabled
+- WSL 2 (the bash build script must run inside WSL)
+
+### 1. Build the Linux binary on Windows
+
+The Dockerfile copies the pre-built self-contained binary from `artifacts/standalone/linux-x64/`.
+Run `build.ps1` first to produce it:
+
+```powershell
+.\build.ps1 -Version 1.2.3 -Targets linux-x64
+```
+
+### 2. Build and push the image from WSL
+
+```bash
+# Navigate to the repo root in WSL (adjust path to match your Windows username)
+cd /mnt/c/Users/<you>/source/HelmRepoLite
+
+chmod +x docker/docker-build.sh
+
+# Usage: ./docker/docker-build.sh <registry> <username> <password> [version] [image-name]
+./docker/docker-build.sh ghcr.io/myorg myuser mytoken 1.2.3
+```
+
+The script will:
+1. Verify the binary exists in `artifacts/standalone/linux-x64/`
+2. `docker login` to the registry
+3. `docker build` using `docker/Dockerfile` (build context = repo root)
+4. `docker push` the tagged image
+
+### 3. Run the container locally
+
+```bash
+docker run -d \
+  --name helmrepolite \
+  -p 8080:8080 \
+  -v $(pwd)/charts:/charts \
+  ghcr.io/myorg/helmrepolite:1.2.3
+
+# Open http://localhost:8080
+```
+
+### Environment variables in Docker
+
+Every flag is available as a `HELMREPOLITE_*` environment variable:
+
+```bash
+docker run -d \
+  --name helmrepolite \
+  -p 8080:8080 \
+  -v $(pwd)/charts:/charts \
+  -e HELMREPOLITE_BASIC_AUTH_USER=admin \
+  -e HELMREPOLITE_BASIC_AUTH_PASS=secret \
+  -e HELMREPOLITE_ALLOW_OVERWRITE=true \
+  ghcr.io/myorg/helmrepolite:1.2.3
+```
+
+---
+
+## Kubernetes (Helm chart)
+
+The chart is in `helm/helmrepolite/`. It deploys a single-replica pod backed by a PVC, a
+ClusterIP service, and an optional ingress-nginx Ingress.
+
+### Prerequisites
+
+- [Helm 3](https://helm.sh/docs/intro/install/)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/) configured for your cluster
+- [ingress-nginx](https://kubernetes.github.io/ingress-nginx/deploy/) installed (if using ingress)
+- A TLS secret in the target namespace (if using HTTPS — see below)
+
+### Quick deploy (no ingress, port-forward access)
+
+```bash
+helm upgrade --install helmrepolite ./helm/helmrepolite \
+  --set image.repository=ghcr.io/myorg/helmrepolite \
+  --set image.tag=1.2.3 \
+  --namespace helmrepo --create-namespace
+
+# Access locally
+kubectl port-forward svc/helmrepolite 8080:80 -n helmrepo
+helm repo add local http://localhost:8080
+```
+
+### Deploy with ingress and TLS
+
+```bash
+# Create a TLS secret from a certificate (or use cert-manager to manage it automatically)
+kubectl create secret tls helm-tls-secret \
+  --cert=path/to/tls.crt \
+  --key=path/to/tls.key \
+  --namespace helmrepo
+
+helm upgrade --install helmrepolite ./helm/helmrepolite \
+  --namespace helmrepo --create-namespace \
+  --set image.repository=ghcr.io/myorg/helmrepolite \
+  --set image.tag=1.2.3 \
+  --set ingress.enabled=true \
+  --set ingress.host=helm.example.com \
+  --set ingress.tls.enabled=true \
+  --set ingress.tls.secretName=helm-tls-secret
+```
+
+After deployment, the server is reachable at `https://helm.example.com` and `index.yaml` will
+contain `https://helm.example.com` as the base URL for all chart download links.
+
+### Deploy with Basic auth
+
+```bash
+helm upgrade --install helmrepolite ./helm/helmrepolite \
+  --namespace helmrepo --create-namespace \
+  --set image.repository=ghcr.io/myorg/helmrepolite \
+  --set image.tag=1.2.3 \
+  --set ingress.enabled=true \
+  --set ingress.host=helm.example.com \
+  --set ingress.tls.enabled=true \
+  --set ingress.tls.secretName=helm-tls-secret \
+  --set server.auth.enabled=true \
+  --set server.auth.username=admin \
+  --set server.auth.password=secret
+
+# Add the authenticated repo to Helm
+helm repo add local https://helm.example.com \
+  --username admin --password secret
+```
+
+### Deploy using a values file (recommended for production)
+
+```yaml
+# my-values.yaml
+image:
+  repository: ghcr.io/myorg/helmrepolite
+  tag: "1.2.3"
+
+ingress:
+  enabled: true
+  host: helm.example.com
+  tls:
+    enabled: true
+    secretName: helm-tls-secret
+
+server:
+  auth:
+    enabled: true
+    existingSecret: helmrepolite-auth   # pre-created Secret with 'username' and 'password' keys
+  allowOverwrite: true
+
+persistence:
+  size: 20Gi
+  storageClass: standard
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+```
+
+```bash
+helm upgrade --install helmrepolite ./helm/helmrepolite \
+  --namespace helmrepo --create-namespace \
+  --values my-values.yaml
+```
+
+### Reverse proxy note
+
+HelmRepoLite must be deployed at the **root of a dedicated hostname**
+(e.g. `helm.example.com`) — not at a sub-path (e.g. `example.com/helm`).
+The server has no path-prefix support; chart download URLs in `index.yaml` would break
+at a sub-path. `helm install` will fail immediately with a `fail` if you configure
+`ingress.path` to anything other than `/` without also setting `server.chartUrl` explicitly.
+
+### Uploading charts to a Kubernetes deployment
+
+```bash
+# Option 1 — kubectl cp into the pod (no network upload needed)
+POD=$(kubectl get pod -l app.kubernetes.io/name=helmrepolite \
+      -n helmrepo -o jsonpath='{.items[0].metadata.name}')
+kubectl cp mychart-0.1.0.tgz helmrepo/${POD}:/charts/mychart-0.1.0.tgz
+# The server auto-indexes the file within seconds — no restart needed.
+
+# Option 2 — HTTP upload
+curl --data-binary "@mychart-0.1.0.tgz" https://helm.example.com/api/charts
+
+# Option 3 — PowerShell
+Invoke-RestMethod -Method POST -Uri https://helm.example.com/api/charts \
+    -InFile mychart-0.1.0.tgz -ContentType "application/octet-stream"
+```
+
+### Upgrade and uninstall
+
+```bash
+# Upgrade image to a new version
+helm upgrade helmrepolite ./helm/helmrepolite \
+  --namespace helmrepo --reuse-values \
+  --set image.tag=1.3.0
+
+# Uninstall (PVC is retained by default — charts data is safe)
+helm uninstall helmrepolite --namespace helmrepo
 ```
 
 ---

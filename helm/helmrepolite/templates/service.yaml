@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helmrepolite.fullname" . }}
+  labels:
+    {{- include "helmrepolite.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    {{- if .Values.server.https.enabled }}
+    - port: {{ .Values.server.https.port }}
+      targetPort: https
+      protocol: TCP
+      name: https
+    {{- end }}
+  selector:
+    {{- include "helmrepolite.selectorLabels" . | nindent 4 }}
