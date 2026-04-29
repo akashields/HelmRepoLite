@@ -120,10 +120,20 @@ public static class ChartInspector
     }
 
     /// <summary>
+    /// Reads README.md out of a .tgz chart package, or returns null if none is present.
+    /// Looks for the first entry at depth 2 named "README.md" (i.e. &lt;chartdir&gt;/README.md).
+    /// </summary>
+    public static string? ReadReadme(string tgzPath)
+        => ReadFileFromTgz(tgzPath, "README.md");
+
+    /// <summary>
     /// Reads Chart.yaml out of a gzip+tar archive without external libs.
     /// Looks for the first entry whose path ends with "/Chart.yaml" (or is exactly "Chart.yaml").
     /// </summary>
     private static string? ReadChartYamlFromTgz(string tgzPath)
+        => ReadFileFromTgz(tgzPath, "Chart.yaml");
+
+    private static string? ReadFileFromTgz(string tgzPath, string targetFileName)
     {
         using var fs = File.OpenRead(tgzPath);
         using var gz = new GZipStream(fs, CompressionMode.Decompress);
@@ -140,7 +150,7 @@ public static class ChartInspector
             // Match "<chartdir>/Chart.yaml" only - not nested Chart.yaml under charts/<dep>/Chart.yaml
             // The convention is that the top-level directory is the chart name.
             var parts = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 2 && parts[1].Equals("Chart.yaml", StringComparison.Ordinal))
+            if (parts.Length == 2 && parts[1].Equals(targetFileName, StringComparison.OrdinalIgnoreCase))
             {
                 if (entry.DataStream is null) continue;
                 using var sr = new StreamReader(entry.DataStream, Encoding.UTF8);

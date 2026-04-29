@@ -279,7 +279,8 @@ public sealed class ChartStore : IDisposable
         finally { _mutex.Release(); }
     }
 
-    public string GetTgzPath(string fileName) => Path.Combine(_options.StorageDir, fileName);
+    // Path.GetFullPath is required because Results.File rejects relative paths.
+    public string GetTgzPath(string fileName) => Path.GetFullPath(Path.Combine(_options.StorageDir, fileName));
 
     /// <summary>Force a rebuild from scratch (e.g. after manual edits).</summary>
     public Task ResyncAsync(CancellationToken ct) => ScanStorageAsync(ct);

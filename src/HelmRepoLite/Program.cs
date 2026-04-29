@@ -136,6 +136,17 @@ if (!options.DisableApi)
             : Results.Json(ToApiEntry(meta));
     });
 
+    // GET /api/charts/{name}/{version}/readme -> README.md from the chart package (text/markdown)
+    api.MapGet("/charts/{name}/{version}/readme", (string name, string version, ChartStore s) =>
+    {
+        var meta = s.FindVersion(name, version);
+        if (meta is null) return Results.NotFound(new { error = "chart version not found" });
+        var readme = ChartInspector.ReadReadme(s.GetTgzPath(meta.FileName));
+        return readme is null
+            ? Results.NotFound(new { error = "this chart has no README.md" })
+            : Results.Content(readme, "text/markdown; charset=utf-8");
+    });
+
     // POST /api/charts -> upload a new chart (raw body OR multipart with field "chart")
     api.MapPost("/charts", async (HttpRequest req, ChartStore s, CancellationToken ct) =>
     {
@@ -319,7 +330,7 @@ static string WelcomePage(ServerOptions opts, string baseUrl, IReadOnlyList<Char
         sb.Append("</strong> <span class=\"count\">(");
         sb.Append(group.Count());
         sb.Append(group.Count() == 1 ? " version" : " versions");
-        sb.Append(")</span></summary><table><thead><tr><th>Version</th><th>App Version</th><th>Description</th><th>Created</th><th>Download</th><th></th></tr></thead><tbody>");
+        sb.Append(")</span></summary><table><thead><tr><th>Version</th><th>App Version</th><th>Description</th><th>Created</th><th>Download</th><th>Readme</th><th></th></tr></thead><tbody>");
         foreach (var c in group.OrderByDescending(c => c.Created))
         {
             sb.Append("<tr><td><code>");
@@ -334,7 +345,11 @@ static string WelcomePage(ServerOptions opts, string baseUrl, IReadOnlyList<Char
             sb.Append(System.Net.WebUtility.HtmlEncode(c.FileName));
             sb.Append("\">⬇ ");
             sb.Append(System.Net.WebUtility.HtmlEncode(c.FileName));
-            sb.Append("</a></td><td>");
+            sb.Append("</a></td><td><a href=\"api/charts/");
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.Name));
+            sb.Append('/');
+            sb.Append(System.Net.WebUtility.HtmlEncode(c.Version));
+            sb.Append("/readme\">README</a></td><td>");
             sb.Append("<button class=\"del\" data-name=\"");
             sb.Append(System.Net.WebUtility.HtmlEncode(c.Name));
             sb.Append("\" data-version=\"");
