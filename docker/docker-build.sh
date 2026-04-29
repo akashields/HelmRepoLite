@@ -26,19 +26,26 @@ IMAGE_NAME="${5:-helmrepolite}"
 FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}:${VERSION}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
 
-# Auto-detect layout:
-#   Published artifacts  -- helmrepolite binary sits next to this script
-#   Source repo          -- binary is in artifacts/standalone/linux-x64/
-if [[ -f "${SCRIPT_DIR}/helmrepolite" ]]; then
+# Detect layout by checking for the src/ directory that only exists at the repo root.
+#
+#   Source repo  (./docker/docker-build.sh):   PARENT_DIR is the repo root → src/ is present
+#   Artifacts    (artifacts/docker/docker-build.sh): PARENT_DIR is artifacts/ → no src/
+if [[ -d "${PARENT_DIR}/src" ]]; then
+    # Running from the source repository's docker/ directory
+    BUILD_CONTEXT="${PARENT_DIR}"
+    DOCKERFILE="${SCRIPT_DIR}/Dockerfile"
+    BINARY="${PARENT_DIR}/artifacts/standalone/linux-x64/helmrepolite"
+elif [[ -f "${SCRIPT_DIR}/helmrepolite" ]]; then
+    # Running from the published artifacts/docker/ directory
     BUILD_CONTEXT="${SCRIPT_DIR}"
     DOCKERFILE="${SCRIPT_DIR}/Dockerfile"
     BINARY="${SCRIPT_DIR}/helmrepolite"
 else
-    REPO_ROOT="$(dirname "${SCRIPT_DIR}")"
-    BUILD_CONTEXT="${REPO_ROOT}"
-    DOCKERFILE="${SCRIPT_DIR}/Dockerfile"
-    BINARY="${REPO_ROOT}/artifacts/standalone/linux-x64/helmrepolite"
+    echo "ERROR: Cannot determine layout."
+    echo "Run from the repo's docker/ directory or from a published artifacts/docker/ directory."
+    exit 1
 fi
 
 echo "========================================"
@@ -51,10 +58,10 @@ echo ""
 # Verify the binary exists before attempting the build
 if [[ ! -f "${BINARY}" ]]; then
     echo "ERROR: Binary not found at ${BINARY}"
-    if [[ "${BUILD_CONTEXT}" == "${SCRIPT_DIR}" ]]; then
-        echo "The artifacts/docker/ directory appears incomplete. Re-run build.ps1 -Targets linux-x64."
+    if [[ -d "${PARENT_DIR}/src" ]]; then
+        echo "Run  .\\build.ps1 -Targets linux-x64  from Windows first, then re-run this script."
     else
-        echo "Run  .\build.ps1 -Targets linux-x64  from Windows first, then re-run this script."
+        echo "The artifacts/docker/ directory appears incomplete. Re-run build.ps1 -Targets linux-x64."
     fi
     exit 1
 fi
