@@ -95,6 +95,28 @@ if ($Targets -contains "helm-chart") {
         Write-Error "helm CLI not found on PATH. Install Helm 3 (https://helm.sh/docs/intro/install/) and re-run."
         exit 1
     }
+
+    # Run helm-docs to regenerate README.md from annotated values.yaml before packaging.
+    # Install it automatically via 'go install' if it is not already on PATH.
+    if (-not (Get-Command helm-docs -ErrorAction SilentlyContinue)) {
+        Write-Host "  helm-docs not found — installing via 'go install'..." -ForegroundColor Yellow
+        if (Get-Command go -ErrorAction SilentlyContinue) {
+            go install github.com/norwoodj/helm-docs/cmd/helm-docs@latest
+            Assert-Success "go install helm-docs"
+        } else {
+            Write-Warning "  'go' not found on PATH; skipping helm-docs. README.md in the chart may be stale."
+            Write-Warning "  Install helm-docs manually: https://github.com/norwoodj/helm-docs/releases"
+        }
+    }
+    if (Get-Command helm-docs -ErrorAction SilentlyContinue) {
+        Write-Host "  Generating chart README.md via helm-docs..." -ForegroundColor DarkGray
+        Push-Location $Root
+        helm-docs --chart-search-root helm --log-level warning
+        $helmDocsExit = $LASTEXITCODE
+        Pop-Location
+        if ($helmDocsExit -ne 0) { Write-Error "helm-docs failed (exit $helmDocsExit)"; exit $helmDocsExit }
+    }
+
     $HelmOut = Join-Path $Artifacts "helm"
     New-Item -ItemType Directory -Path $HelmOut -Force | Out-Null
     helm package (Join-Path $Root "helm\helmrepolite") `
