@@ -136,8 +136,11 @@ if ($StandaloneTargets -contains "linux-x64") {
     # Binary
     Copy-Item (Join-Path $Artifacts "standalone\linux-x64\helmrepolite") $DockerOut
 
-    # Build script (context-aware — works from artifacts/docker/ or source docker/)
-    Copy-Item (Join-Path $Root "docker\docker-build.sh") $DockerOut
+    # Build script — copy with LF line endings so it runs in WSL/Linux even when
+    # git core.autocrlf=true has checked out the source file with CRLF.
+    $ShSrc = Get-Content -Raw (Join-Path $Root "docker\docker-build.sh")
+    $ShSrc = $ShSrc -replace "`r`n", "`n" -replace "`r", "`n"
+    [System.IO.File]::WriteAllText((Join-Path $DockerOut "docker-build.sh"), $ShSrc)
 
     # Self-contained Dockerfile: binary sits alongside it so COPY helmrepolite just works
     Set-Content -Path (Join-Path $DockerOut "Dockerfile") -Encoding UTF8 -Value @'
