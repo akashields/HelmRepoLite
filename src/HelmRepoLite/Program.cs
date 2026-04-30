@@ -495,6 +495,7 @@ static string WelcomePage(ServerOptions opts, string baseUrl, IReadOnlyList<Char
     <a href="/index.yaml">/index.yaml</a>
     <a href="/api/charts">/api/charts</a>
     <a href="/health">/health</a>
+    {{(opts.DisableApi ? "" : "<a href=\"#\" onclick=\"resyncCharts(event)\">↻ Resync</a>")}}
     {{(opts.EnableShutdown ? "<a href=\"#\" onclick=\"shutdownServer(event)\" style=\"background:#fff4f4;color:#c00;border:1px solid #e0a0a0\">⏻ Shutdown</a>" : "")}}
   </nav>
 
@@ -548,6 +549,18 @@ helm search repo local</pre>
       })
       .catch(function(err) { alert('Delete failed: ' + err); btn.disabled = false; });
   });
+  function resyncCharts(e) {
+    e.preventDefault();
+    var btn = e.currentTarget;
+    btn.textContent = '↻ Resyncing…';
+    btn.style.pointerEvents = 'none';
+    fetch('/api/resync', { method: 'POST' })
+      .then(function(r) {
+        if (r.ok) { location.reload(); }
+        else { btn.textContent = '↻ Resync'; btn.style.pointerEvents = ''; alert('Resync failed: ' + r.status); }
+      })
+      .catch(function(err) { btn.textContent = '↻ Resync'; btn.style.pointerEvents = ''; alert('Resync failed: ' + err); });
+  }
   function shutdownServer(e) {
     e.preventDefault();
     if (!confirm('Shut down the HelmRepoLite server?\n\nThe process will exit.')) return;
