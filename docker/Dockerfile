@@ -36,6 +36,10 @@ EXPOSE 8080
 
 VOLUME ["/charts"]
 
+# Defaults for standalone Docker use; all overridden by env vars set in the
+# Helm chart deployment (or by -e flags on docker run).
+ENV HELMREPOLITE_STORAGE_DIR=/charts
+ENV HELMREPOLITE_PORT=8080
+ENV HELMREPOLITE_HOST=0.0.0.0
+
 ENTRYPOINT ["./helmrepolite"]
-# Default args — all overridable via env vars (HELMREPOLITE_*)
-CMD ["--storage-dir=/charts", "--port=8080", "--host=0.0.0.0"]

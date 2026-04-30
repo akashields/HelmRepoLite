@@ -190,8 +190,11 @@ USER helmrepo
 EXPOSE 8080
 VOLUME ["/charts"]
 
+ENV HELMREPOLITE_STORAGE_DIR=/charts
+ENV HELMREPOLITE_PORT=8080
+ENV HELMREPOLITE_HOST=0.0.0.0
+
 ENTRYPOINT ["./helmrepolite"]
-CMD ["--storage-dir=/charts", "--port=8080", "--host=0.0.0.0"]
 '@
     $DockerfileContent = $DockerfileContent -replace "`r`n", "`n" -replace "`r", "`n"
     [System.IO.File]::WriteAllText((Join-Path $DockerOut "Dockerfile"), $DockerfileContent)
