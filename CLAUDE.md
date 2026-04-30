@@ -46,7 +46,7 @@ dotnet pack ./src/HelmRepoLite -c Release
 | Change CLI flags | `src/HelmRepoLite/CliParser.cs` and `ServerOptions.cs` (and update `README.md` and `docs/requirements.md`) |
 | Add an HTTP route | `src/HelmRepoLite/Program.cs` |
 | Change how `Chart.yaml` is parsed | `src/HelmRepoLite/MiniYaml.cs` (reader) and `src/HelmRepoLite/ChartInspector.cs` (consumer) |
-| Change the `index.yaml` schema | `src/HelmRepoLite/IndexBuilder.cs` and `MiniYamlWriter.cs` |
+| Change the `index.yaml` schema | `src/HelmRepoLite/IndexBuilder.cs` and `MiniYaml.cs` (see `MiniYamlWriter` class at the bottom) |
 | Change upload/delete behaviour | `src/HelmRepoLite/ChartStore.cs` |
 | Add or change auth | `src/HelmRepoLite/BasicAuthMiddleware.cs` |
 

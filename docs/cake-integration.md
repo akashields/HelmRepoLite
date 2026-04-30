@@ -22,7 +22,6 @@ A common pattern: spin up a Helm repo at the start of a Cake build, publish char
 
 var configuration = Argument("configuration", "Release");
 var helmRepoDir   = MakeAbsolute(Directory("./build/helm-repo"));
-var helmDropDir   = MakeAbsolute(Directory("./build/helm-drop"));
 var helmRepoUrl   = "http://localhost:8080";
 IProcess helmRepoProcess = null;
 
@@ -38,7 +37,6 @@ Task("StartHelmRepo")
     .Does(() =>
 {
     EnsureDirectoryExists(helmRepoDir);
-    EnsureDirectoryExists(helmDropDir);
 
     var dll = $"./tools/HelmRepoLite/src/HelmRepoLite/bin/{configuration}/net10.0/HelmRepoLite.dll";
     helmRepoProcess = StartAndReturnProcess("dotnet",
@@ -46,12 +44,11 @@ Task("StartHelmRepo")
         {
             Arguments = $"\"{dll}\" --port 8080 " +
                         $"--storage-dir \"{helmRepoDir}\" " +
-                        $"--drop-dir \"{helmDropDir}\" " +
                         $"--chart-url {helmRepoUrl}",
             RedirectStandardOutput = false,
         });
 
-    // Wait until /health responds.
+    // Wait until /health/ready responds (returns 200 once storage scan is complete).
     var deadline = DateTime.UtcNow.AddSeconds(15);
     using (var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(2) })
     {
@@ -59,7 +56,7 @@ Task("StartHelmRepo")
         {
             try
             {
-                var resp = http.GetAsync($"{helmRepoUrl}/health").GetAwaiter().GetResult();
+                var resp = http.GetAsync($"{helmRepoUrl}/health/ready").GetAwaiter().GetResult();
                 if (resp.IsSuccessStatusCode) { Information("HelmRepoLite is up at {0}", helmRepoUrl); return; }
             }
             catch { /* not yet */ }
@@ -77,9 +74,9 @@ Task("PackageAndPublishCharts")
     {
         // Two equivalent options:
 
-        // Option A: package locally and drop the file into the watched folder.
+        // Option A: package directly into the storage dir — FileSystemWatcher picks it up automatically.
         StartProcess("helm",
-            new ProcessSettings { Arguments = $"package \"{chartDir}\" --destination \"{helmDropDir}\"" });
+            new ProcessSettings { Arguments = $"package \"{chartDir}\" --destination \"{helmRepoDir}\"" });
 
         // Option B: use the upload API (requires the helm-push plugin or curl).
         // StartProcess("helm", new ProcessSettings { Arguments = $"package \"{chartDir}\" --destination ./build" });

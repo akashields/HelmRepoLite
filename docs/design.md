@@ -29,7 +29,7 @@
               |                               |                        |
    +----------v---------+        +-----------v---------+    +---------v----------+
    |  ChartInspector    |        |   IndexBuilder /    |    |  FileSystemWatcher |
-   |  (.tgz parser +    |        |   MiniYamlWriter    |    |  (drop + storage)  |
+   |  (.tgz parser +    |        |   MiniYamlWriter    |    |  (storage dir)     |
    |   SHA-256 digest)  |        +---------------------+    +--------------------+
    +--------------------+
               |
@@ -47,11 +47,13 @@
 | `CliParser` | Parse argv + env vars into `ServerOptions` | `CliParser.Parse` |
 | `ServerOptions` | Immutable runtime config record | `ServerOptions` |
 | `BasicAuthMiddleware` | Optional HTTP Basic auth, anonymous-GET aware | `BasicAuthMiddleware.InvokeAsync` |
-| `ChartStore` | Single source of truth for the in-memory index; owns all mutations and the file watchers | `ChartStore`, `ChartStore.UploadAsync`, `ChartStore.DeleteAsync` |
+| `ChartStore` | Single source of truth for the in-memory index; owns all mutations and the file watcher | `ChartStore`, `ChartStore.UploadAsync`, `ChartStore.DeleteAsync` |
+| `ChartStoreHealthCheck` | ASP.NET Core `IHealthCheck` backed by `ChartStore.IsReady` | `ChartStoreHealthCheck.CheckHealthAsync` |
 | `ChartInspector` | Open a `.tgz`, find `Chart.yaml`, parse it, compute SHA-256 | `ChartInspector.Inspect`, `ChartMetadata` |
 | `IndexBuilder` | Build the index.yaml object graph from `ChartMetadata` | `IndexBuilder.Build` |
 | `MiniYaml` | Minimal YAML *reader* sufficient for Chart.yaml | `MiniYaml.Parse` |
-| `MiniYamlWriter` | Minimal YAML *writer* sufficient for index.yaml | `MiniYamlWriter.Write` |
+| `MiniYamlWriter` | Minimal YAML *writer* sufficient for index.yaml (defined in `MiniYaml.cs`) | `MiniYamlWriter.Write` |
+| `SimpleJson` | Reflection-free JSON writer; trim-safe replacement for `System.Text.Json` on anonymous types | `SimpleJson.Write`, `SimpleJson.Err` |
 
 ## Key decisions
 
@@ -71,17 +73,21 @@ The "no third-party packages" rule is the hardest constraint. The two well-known
 
 Mutations (`UploadAsync`, `DeleteAsync`) are async because they stream uploads to disk. `lock` doesn't compose with `await`. `SemaphoreSlim(1, 1)` gives us mutex semantics that work in async code.
 
-### Why both a drop folder and an upload API?
+### Why both a watched storage dir and an upload API?
 
 These are different ergonomic fits:
-- **Drop folder** is the natural thing in a Cake build: `helm package` writes a `.tgz` next to the build output, and a `Move-Item` step drops it. No HTTP plumbing, no auth, no curl-vs-Invoke-WebRequest cross-platform headaches.
-- **Upload API** is what `helm cm-push` and most CI/CD platforms know about. Required for compatibility.
+- **Filesystem copy** is the natural thing in a Cake build: `helm package` writes a `.tgz` directly into the storage directory and `FileSystemWatcher` picks it up automatically. No HTTP plumbing, no auth, no curl-vs-Invoke-WebRequest cross-platform headaches.
+- **Upload API** is what `helm cm-push` and most CI/CD platforms know about. Required for ChartMuseum compatibility.
 
-The drop folder watcher uses the same import path as the upload API (validate → atomic move → re-index), so behaviour is consistent.
+Both paths converge on the same `ChartStore` mutation path (validate → write → re-index), so behaviour is consistent.
 
-### Why `FileSystemWatcher` for the storage dir too?
+### Why `FileSystemWatcher` for the storage dir?
 
-Out-of-band edits happen: a developer might `rm` an old version, an `rsync` job might top up the directory. Watching the storage dir keeps the in-memory index honest without requiring a server restart. The watcher can miss events under heavy load — we mitigate with `POST /api/resync` and a startup full-scan.
+Out-of-band edits happen: a developer might `rm` an old version, an `rsync` job or Cake build might drop in a new `.tgz`. Watching the storage dir keeps the in-memory index honest without requiring a server restart. The watcher can miss events under heavy load or on network-backed storage (NFS, Azure Files) — we mitigate with `POST /api/resync` and a startup full-scan.
+
+### Why a hand-rolled JSON writer (`SimpleJson`)?
+
+When published with `PublishTrimmed=true`, `System.Text.Json`'s reflection-based serialiser is stripped. Anonymous types and `Dictionary<string,object?>` fail at runtime with `NotSupportedException: TypeInfoResolver of type '[]'`. The fix is `SimpleJson` — a ~100-line writer for the concrete types this server serialises (`null`, `bool`, `string`, `Dictionary<string,object?>`, `List<object?>`). No reflection, no attributes, no source-generator ceremony.
 
 ### Why is `index.yaml` written to disk *and* served from memory?
 

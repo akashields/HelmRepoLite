@@ -166,7 +166,8 @@ helm cm-push mychart-0.1.0.tgz local
 | `GET` | `/index.yaml` | Helm repository index |
 | `GET` | `/charts/{file}.tgz` | Chart package download |
 | `GET` | `/charts/{file}.tgz.prov` | Provenance file download |
-| `GET` | `/health` | Liveness probe — `{"status":"ok"}` |
+| `GET` | `/health/live` | Liveness probe — `{"status":"Healthy"}` |
+| `GET` | `/health/ready` | Readiness probe — `{"status":"Healthy"}` once storage scan completes |
 | `GET` | `/server/info` | ChartMuseum compatibility probe — `{"version":"…","storage":"local"}` |
 
 ### ChartMuseum-compatible API (`/api`)
@@ -202,7 +203,7 @@ $proc = Start-Process helmrepolite `
 # Wait for it to be ready
 $timeout = [DateTime]::UtcNow.AddSeconds(15)
 while ([DateTime]::UtcNow -lt $timeout) {
-    try { Invoke-RestMethod http://localhost:8080/health -ErrorAction Stop; break }
+    try { Invoke-RestMethod http://localhost:8080/health/ready -ErrorAction Stop; break }
     catch { Start-Sleep -Milliseconds 200 }
 }
 
@@ -224,7 +225,7 @@ helmrepolite --storage-dir=./charts --enable-shutdown --port=8080 &
 SERVER_PID=$!
 
 # Wait for ready
-until curl -sf http://localhost:8080/health > /dev/null; do sleep 0.2; done
+until curl -sf http://localhost:8080/health/ready > /dev/null; do sleep 0.2; done
 
 # ... do your Helm work ...
 cp mychart-0.1.0.tgz ./charts/
@@ -262,8 +263,8 @@ cd /mnt/c/Users/<you>/source/HelmRepoLite
 
 chmod +x docker/docker-build.sh
 
-# Usage: ./docker/docker-build.sh <registry> <username> <password> [version] [image-name]
-./docker/docker-build.sh ghcr.io/myorg myuser mytoken 1.2.3
+# Usage: ./docker/docker-build.sh <repository> <username> <password> [version]
+./docker/docker-build.sh ghcr.io/myorg/helmrepolite myuser mytoken 1.2.3
 ```
 
 The script will:
@@ -392,6 +393,7 @@ server:
 persistence:
   size: 20Gi
   storageClass: standard
+  # mountPath: /data           # optional: mount PVC here when storageDir is a subdirectory of the PVC
 
 resources:
   requests:
@@ -576,9 +578,11 @@ src/
   HelmRepoLite/
     Program.cs              Host setup and route registration
     ChartStore.cs           In-memory index + FileSystemWatcher
+    ChartStoreHealthCheck.cs  ASP.NET Core health check backed by ChartStore.IsReady
     ChartInspector.cs       Reads a .tgz, extracts Chart.yaml, computes SHA-256
-    MiniYaml.cs             Purpose-built YAML reader for the Chart.yaml subset
+    MiniYaml.cs             Purpose-built YAML reader/writer for Chart.yaml / index.yaml
     IndexBuilder.cs         Builds the in-memory index.yaml document
+    SimpleJson.cs           Reflection-free JSON writer (trim-safe alternative to System.Text.Json)
     CliParser.cs            Zero-dependency CLI argument parser
     ServerOptions.cs        Strongly-typed configuration record
     BasicAuthMiddleware.cs  HTTP Basic auth middleware

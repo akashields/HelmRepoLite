@@ -13,7 +13,7 @@ We need a Helm chart repository that we can stand up inside a CI pipeline (Cake 
 - The repo passes `helm repo add`, `helm repo update`, `helm search repo`, `helm install`, and `helm pull`.
 
 ### FR-2: Two publishing paths
-- **Drop folder:** A configured directory is watched; any `.tgz` placed in it is validated, moved into storage atomically, and reflected in the index. Files that fail validation stay in the drop folder for inspection.
+- **Direct file copy:** Copy a `.tgz` into the storage directory; `FileSystemWatcher` detects it within seconds and the index updates automatically. `POST /api/resync` forces an immediate re-scan if the watcher misses an event (e.g. on network-backed storage).
 - **HTTP upload:** `POST /api/charts` accepts either a raw `.tgz` body or a `multipart/form-data` payload with field `chart` (and optional `prov`). The `helm-push`/`helm cm-push` plugin works against this endpoint.
 
 ### FR-3: ChartMuseum-compatible API
@@ -44,7 +44,8 @@ We do **not** implement ChartMuseum's multi-tenancy (`--depth`) in v1. Routes co
 
 ### FR-7: Operator visibility
 - Structured single-line console logs at info / debug levels.
-- A `GET /health` endpoint for liveness probes.
+- `GET /health/live` — liveness probe (always responds once the process is up).
+- `GET /health/ready` — readiness probe (returns Healthy only after the startup storage scan completes).
 - A `GET /` welcome page with the URL to add to `helm repo add`.
 
 ## Non-functional requirements
