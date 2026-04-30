@@ -3,27 +3,31 @@
 # Build the HelmRepoLite Docker image and push it to a container registry.
 #
 # Usage:
-#   ./docker-build.sh <registry> <username> <password> [version] [image-name]
+#   ./docker-build.sh <repository> <username> <password> [version]
+#
+# <repository> is the full image repository path, e.g. ghcr.io/alex/helmrepolite.
+# The registry host is derived automatically for docker login.
 #
 # This script works in two layouts:
 #
 # 1. From published artifacts (artifacts/docker/ after running build.ps1):
-#      ./docker-build.sh ghcr.io/myorg myuser mytoken 1.2.3
+#      ./docker-build.sh ghcr.io/alex/helmrepolite myuser mytoken 1.2.3
 #    The binary and Dockerfile are in the same directory as this script.
 #
 # 2. From the source repository (docker/ directory):
-#      ./docker/docker-build.sh ghcr.io/myorg myuser mytoken 1.2.3
+#      ./docker/docker-build.sh ghcr.io/alex/helmrepolite myuser mytoken 1.2.3
 #    Run  .\build.ps1 -Targets linux-x64  on Windows first.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-REGISTRY="${1:?ERROR: registry is required. Usage: $0 <registry> <username> <password> [version] [image-name]}"
+REPOSITORY="${1:?ERROR: repository is required. Usage: $0 <repository> <username> <password> [version]}"
 USERNAME="${2:?ERROR: username is required.}"
 PASSWORD="${3:?ERROR: password is required.}"
 VERSION="${4:-latest}"
-IMAGE_NAME="${5:-helmrepolite}"
 
-FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}:${VERSION}"
+FULL_IMAGE="${REPOSITORY}:${VERSION}"
+# Extract just the hostname for docker login (everything before the first /)
+REGISTRY="${REPOSITORY%%/*}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
@@ -88,5 +92,5 @@ echo "Done: ${FULL_IMAGE}"
 echo ""
 echo "Deploy to Kubernetes:"
 echo "  helm upgrade --install helmrepolite ./helm/helmrepolite \\"
-echo "    --set image.repository=${REGISTRY}/${IMAGE_NAME} \\"
+echo "    --set image.repository=${REPOSITORY} \\"
 echo "    --set image.tag=${VERSION}"

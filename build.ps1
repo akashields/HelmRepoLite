@@ -212,7 +212,7 @@ foreach ($Rid in $StandaloneTargets) {
 }
 if ($StandaloneTargets -contains "linux-x64") {
     Write-Host "  Docker artifacts    : $Artifacts\docker\"
-    Write-Host "    (copy to WSL and run: chmod +x docker-build.sh && ./docker-build.sh <registry> <user> <pass> $Version)"
+    Write-Host "    (copy to WSL and run: chmod +x docker-build.sh && ./docker-build.sh ghcr.io/myorg/helmrepolite <user> <pass> $Version)"
 }
 Write-Host ""
 if ($Targets -contains "tool") {
