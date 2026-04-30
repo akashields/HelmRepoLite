@@ -36,6 +36,9 @@ public sealed class ChartStore : IDisposable
     /// <summary>Cached, fully serialized index.yaml as UTF-8 bytes.</summary>
     public byte[] IndexBytes => _indexBytes;
 
+    /// <summary>True after the initial storage scan completes. Used by the readiness health check.</summary>
+    public bool IsReady { get; private set; }
+
     /// <summary>Snapshot of the current in-memory index; copy returned to caller.</summary>
     public IReadOnlyList<ChartMetadata> Snapshot()
     {
@@ -54,6 +57,8 @@ public sealed class ChartStore : IDisposable
 
         // Full rescan: picks up any adds, changes, or deletes that happened while offline.
         await ScanStorageAsync(ct).ConfigureAwait(false);
+
+        IsReady = true;
 
         // Watch storage for live changes: copy/move/replace/delete a .tgz and the index
         // updates automatically without a server restart.

@@ -3,6 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using HelmRepoLite;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -43,6 +44,8 @@ builder.Logging.SetMinimumLevel(options.Debug ? LogLevel.Debug : LogLevel.Inform
 
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<ChartStore>();
+builder.Services.AddHealthChecks()
+    .AddCheck<ChartStoreHealthCheck>("storage");
 
 builder.WebHost.ConfigureKestrel(k =>
 {
@@ -104,8 +107,10 @@ app.MapGet("/charts/{name}/{version}/readme", (string name, string version, Char
     return Results.Content(ReadmePage(meta, markdown), "text/html; charset=utf-8");
 });
 
-// GET /health -> simple liveness check
-app.MapGet("/health", () => Results.Json(new { status = "ok" }));
+// GET /health/live  -> liveness: just confirms the process is responding
+// GET /health/ready -> readiness: confirms the storage scan completed
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
+app.MapHealthChecks("/health/ready");
 
 // GET /server/info -> ChartMuseum compatibility probe used by helm-push and dashboard tools
 app.MapGet("/server/info", () => Results.Json(new

@@ -31,6 +31,13 @@ public sealed class BasicAuthMiddleware
             return;
         }
 
+        // Health endpoints must always be reachable by the kubelet regardless of auth settings.
+        if (ctx.Request.Path.StartsWithSegments("/health", StringComparison.OrdinalIgnoreCase))
+        {
+            await _next(ctx).ConfigureAwait(false);
+            return;
+        }
+
         // Allow anonymous reads if enabled.
         if (_options.AnonymousGet && (HttpMethods.IsGet(ctx.Request.Method) || HttpMethods.IsHead(ctx.Request.Method)))
         {
