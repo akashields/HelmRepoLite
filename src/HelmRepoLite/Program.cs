@@ -113,11 +113,11 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => fa
 app.MapHealthChecks("/health/ready");
 
 // GET /server/info -> ChartMuseum compatibility probe used by helm-push and dashboard tools
-app.MapGet("/server/info", () => Results.Json(new
+app.MapGet("/server/info", () =>
 {
-    version = $"helmrepolite-{typeof(ServerOptions).Assembly.GetName().Version?.ToString(3) ?? "0.0.0"}",
-    storage = "local",
-}));
+    var ver = typeof(ServerOptions).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+    return Results.Text($"{{\"version\":\"helmrepolite-{ver}\",\"storage\":\"local\"}}", "application/json");
+});
 
 // ---- ChartMuseum-compatible /api routes (read+write) -----------------------
 
@@ -128,18 +128,19 @@ if (!options.DisableApi)
     // GET /api/charts -> map of chartName -> array of versions
     api.MapGet("/charts", (ChartStore s) =>
     {
-        var map = s.Snapshot()
-            .GroupBy(c => c.Name, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Created).Select(ToApiEntry).ToList(), StringComparer.Ordinal);
-        return Results.Json(map);
+        var map = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var g in s.Snapshot().GroupBy(c => c.Name, StringComparer.Ordinal))
+            map[g.Key] = g.OrderByDescending(c => c.Created).Select(c => (object?)ToApiEntry(c)).ToList();
+        return Results.Text(SimpleJson.Write(map), "application/json");
     });
 
     // GET /api/charts/{name} -> array of versions for that chart
     api.MapGet("/charts/{name}", (string name, ChartStore s) =>
     {
         var versions = s.ListVersions(name);
-        if (versions.Count == 0) return Results.NotFound(new { error = "chart not found" });
-        return Results.Json(versions.Select(ToApiEntry).ToList());
+        if (versions.Count == 0) return Results.Text(SimpleJson.Err("chart not found"), "application/json", statusCode: 404);
+        var list = versions.Select(c => (object?)ToApiEntry(c)).ToList();
+        return Results.Text(SimpleJson.Write(list), "application/json");
     });
 
     // GET /api/charts/{name}/{version} -> a specific version
@@ -147,8 +148,8 @@ if (!options.DisableApi)
     {
         var meta = s.FindVersion(name, version);
         return meta is null
-            ? Results.NotFound(new { error = "chart version not found" })
-            : Results.Json(ToApiEntry(meta));
+            ? Results.Text(SimpleJson.Err("chart version not found"), "application/json", statusCode: 404)
+            : Results.Text(SimpleJson.Write(ToApiEntry(meta)), "application/json");
     });
 
     // GET /api/charts/{name}/{version}/readme -> README.md from the chart package, or a generated fallback
@@ -184,23 +185,23 @@ if (!options.DisableApi)
                     await s.UploadProvenanceAsync(lastChart.FileName, s2, ct).ConfigureAwait(false);
                 }
                 if (chartFile is null && provFile is null)
-                    return Results.BadRequest(new { error = "no 'chart' or 'prov' field in form" });
+                    return Results.Text(SimpleJson.Err("no 'chart' or 'prov' field in form"), "application/json", statusCode: 400);
 
-                return Results.Json(new { saved = true });
+                return Results.Text("{\"saved\":true}", "application/json");
             }
             else
             {
                 await s.UploadAsync(req.Body, force, ct).ConfigureAwait(false);
-                return Results.Json(new { saved = true });
+                return Results.Text("{\"saved\":true}", "application/json");
             }
         }
         catch (InvalidOperationException ex)
         {
-            return Results.Conflict(new { error = ex.Message });
+            return Results.Text(SimpleJson.Err(ex.Message), "application/json", statusCode: 409);
         }
         catch (InvalidDataException ex)
         {
-            return Results.BadRequest(new { error = ex.Message });
+            return Results.Text(SimpleJson.Err(ex.Message), "application/json", statusCode: 400);
         }
     });
 
@@ -209,9 +210,9 @@ if (!options.DisableApi)
     {
         var fileName = req.Query["file"].ToString();
         if (string.IsNullOrEmpty(fileName) || !IsSafeName(fileName) || !fileName.EndsWith(".tgz", StringComparison.Ordinal))
-            return Results.BadRequest(new { error = "missing or invalid ?file=<chart>.tgz query parameter" });
+            return Results.Text(SimpleJson.Err("missing or invalid ?file=<chart>.tgz query parameter"), "application/json", statusCode: 400);
         await s.UploadProvenanceAsync(fileName, req.Body, ct).ConfigureAwait(false);
-        return Results.Json(new { saved = true });
+        return Results.Text("{\"saved\":true}", "application/json");
     });
 
     // DELETE /api/charts/{name}/{version}
@@ -221,8 +222,8 @@ if (!options.DisableApi)
         {
             var ok = await s.DeleteAsync(name, version, ct).ConfigureAwait(false);
             return ok
-                ? Results.Json(new { deleted = true })
-                : Results.NotFound(new { error = "chart version not found" });
+                ? Results.Text("{\"deleted\":true}", "application/json")
+                : Results.Text(SimpleJson.Err("chart version not found"), "application/json", statusCode: 404);
         });
     }
     else
@@ -234,7 +235,7 @@ if (!options.DisableApi)
     api.MapPost("/resync", async (ChartStore s, CancellationToken ct) =>
     {
         await s.ResyncAsync(ct).ConfigureAwait(false);
-        return Results.Json(new { resynced = true });
+        return Results.Text("{\"resynced\":true}", "application/json");
     });
 }
 
@@ -251,7 +252,7 @@ if (options.EnableShutdown)
             await Task.Delay(100).ConfigureAwait(false);
             lifetime.StopApplication();
         });
-        return Results.Ok(new { shuttingDown = true });
+        return Results.Text("{\"shuttingDown\":true}", "application/json");
     });
 }
 
@@ -321,7 +322,7 @@ static Dictionary<string, object?> ToApiEntry(ChartMetadata c)
         ["version"] = c.Version,
         ["digest"] = c.Digest,
         ["created"] = c.Created.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture),
-        ["urls"] = new[] { $"charts/{c.FileName}" },
+        ["urls"] = new List<object?> { $"charts/{c.FileName}" },
     };
     if (!string.IsNullOrEmpty(c.ApiVersion)) d["apiVersion"] = c.ApiVersion;
     if (!string.IsNullOrEmpty(c.AppVersion)) d["appVersion"] = c.AppVersion;
@@ -499,7 +500,7 @@ static string WelcomePage(ServerOptions opts, string baseUrl, IReadOnlyList<Char
   <nav>
     <a href="/index.yaml">/index.yaml</a>
     <a href="/api/charts">/api/charts</a>
-    <a href="/health">/health</a>
+    <a href="/health/ready">/health/ready</a>
     {{(opts.DisableApi ? "" : "<a href=\"#\" onclick=\"resyncCharts(event)\">↻ Resync</a>")}}
     {{(opts.EnableShutdown ? "<a href=\"#\" onclick=\"shutdownServer(event)\" style=\"background:#fff4f4;color:#c00;border:1px solid #e0a0a0\">⏻ Shutdown</a>" : "")}}
   </nav>
@@ -560,10 +561,7 @@ helm search repo local</pre>
     btn.textContent = '↻ Resyncing…';
     btn.style.pointerEvents = 'none';
     fetch('/api/resync', { method: 'POST' })
-      .then(function(r) {
-        if (r.ok) { location.reload(); }
-        else { btn.textContent = '↻ Resync'; btn.style.pointerEvents = ''; alert('Resync failed: ' + r.status); }
-      })
+      .then(function() { location.reload(); })
       .catch(function(err) { btn.textContent = '↻ Resync'; btn.style.pointerEvents = ''; alert('Resync failed: ' + err); });
   }
   function shutdownServer(e) {
