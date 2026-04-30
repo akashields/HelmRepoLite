@@ -60,7 +60,7 @@ A lightweight, self-hosted, ChartMuseum-compatible Helm chart repository server.
 | probes.readiness.initialDelaySeconds | int | `3` | Seconds to wait before the first readiness check. |
 | probes.readiness.periodSeconds | int | `10` | Seconds between readiness checks. |
 | probes.readiness.timeoutSeconds | int | `3` | Seconds before a readiness check times out. |
-| replicaCount | int | `1` | Number of pod replicas. |
+| replicaCount | int | `1` | Number of pod replicas.lol |
 | resources | object | `{}` | CPU and memory resource requests and limits for the server container. |
 | securityContext | object | see values.yaml | Container-level security context. |
 | server | object | `{"allowOverwrite":false,"auth":{"enabled":false,"existingSecret":"","password":"","passwordKey":"password","requireAuthGet":false,"username":"","usernameKey":"username"},"chartUrl":"","debug":false,"disableApi":false,"disableDelete":false,"enableShutdown":false,"host":"0.0.0.0","https":{"certPasswordKey":"cert-password","certSecretKey":"cert.pfx","certSecretName":"","enabled":false,"port":8443},"port":8080,"storageDir":"/charts"}` | Server configuration. Each key maps to a CLI flag or `HELMREPOLITE_*` environment variable. |

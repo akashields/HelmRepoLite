@@ -19,7 +19,7 @@ nameOverride: ""
 # -- Override the full resource name prefix.
 fullnameOverride: ""
 
-# -- Number of pod replicas.
+# -- Number of pod replicas.lol
 replicaCount: 1
 
 # -- Server configuration. Each key maps to a CLI flag or `HELMREPOLITE_*` environment variable.
