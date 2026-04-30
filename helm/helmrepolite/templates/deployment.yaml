@@ -128,7 +128,7 @@ spec:
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
           volumeMounts:
             - name: chart-storage
-              mountPath: {{ .Values.server.storageDir }}
+              mountPath: {{ .Values.persistence.mountPath | default .Values.server.storageDir }}
             {{- if and .Values.server.https.enabled .Values.server.https.certSecretName }}
             - name: https-cert
               mountPath: /certs

@@ -40,10 +40,11 @@ A lightweight, self-hosted, ChartMuseum-compatible Helm chart repository server.
 | ingress.tls.secretName | string | `""` | Name of the Kubernetes TLS Secret containing the certificate and key. |
 | nameOverride | string | `""` | Override the chart name component of generated resource names. |
 | nodeSelector | object | `{}` | Node selector constraints for pod scheduling. |
-| persistence | object | `{"accessMode":"ReadWriteOnce","enabled":true,"existingClaim":"","size":"10Gi","storageClass":""}` | Persistent storage for chart packages. |
+| persistence | object | `{"accessMode":"ReadWriteOnce","enabled":true,"existingClaim":"","mountPath":"","size":"10Gi","storageClass":""}` | Persistent storage for chart packages. |
 | persistence.accessMode | string | `"ReadWriteOnce"` | PVC access mode. |
 | persistence.enabled | bool | `true` | Create a PersistentVolumeClaim for chart storage. |
 | persistence.existingClaim | string | `""` | Use a pre-existing PVC instead of creating one. |
+| persistence.mountPath | string | `""` | Path inside the container where the PVC is mounted. Defaults to `server.storageDir` when empty (PVC root == storage dir). Set this to a parent path when you want `server.storageDir` to be a subdirectory within the PVC — e.g. `mountPath: /data` with `server.storageDir: /data/charts` so files accumulate under `charts/` inside the volume rather than at the volume root. |
 | persistence.size | string | `"10Gi"` | PVC size. |
 | persistence.storageClass | string | `""` | Storage class name. Uses the cluster default when empty. |
 | podAnnotations | object | `{}` | Annotations added to every pod. |
